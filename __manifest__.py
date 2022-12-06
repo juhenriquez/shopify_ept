@@ -1,3 +1,4 @@
+# noinspection PyStatementEffect
 {
     # App information
     'name': 'Shopify Odoo Connector',
