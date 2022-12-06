@@ -300,9 +300,9 @@ class ResConfigSettings(models.TransientModel):
     # Analytic
     shopify_analytic_account_id = fields.Many2one('account.analytic.account', string='Shopify Analytic Account',
                                                   domain="['|', ('company_id', '=', False), ('company_id', '=', shopify_company_id)]")
-    shopify_analytic_tag_ids = fields.Many2many('account.analytic.tag', 'shopify_res_config_analytic_account_tag_rel',
-                                                string='Shopify Analytic Tags',
-                                                domain="['|', ('company_id', '=', False), ('company_id', '=', shopify_company_id)]")
+    # shopify_analytic_tag_ids = fields.Many2many('account.analytic.tag', 'shopify_res_config_analytic_account_tag_rel',
+    #                                             string='Shopify Analytic Tags',
+    #                                             domain="['|', ('company_id', '=', False), ('company_id', '=', shopify_company_id)]")
     shopify_lang_id = fields.Many2one('res.lang', string='Shopify Instance Language',
                                       help="Select language for Shopify customer.")
     # presentment currency
@@ -357,7 +357,7 @@ class ResConfigSettings(models.TransientModel):
             self.auto_fulfill_gift_card_order = instance.auto_fulfill_gift_card_order
             self.shopify_import_order_after_date = instance.import_order_after_date or False
             self.shopify_analytic_account_id = instance.shopify_analytic_account_id.id or False
-            self.shopify_analytic_tag_ids = instance.shopify_analytic_tag_ids.ids
+            # self.shopify_analytic_tag_ids = instance.shopify_analytic_tag_ids.ids
             self.shopify_lang_id = instance.shopify_lang_id and instance.shopify_lang_id.id or False
             self.order_visible_currency = instance.order_visible_currency or False
             self.is_shopify_digest = instance.is_shopify_digest or False
@@ -413,7 +413,7 @@ class ResConfigSettings(models.TransientModel):
             values["import_order_after_date"] = self.shopify_import_order_after_date
             values["shopify_analytic_account_id"] = self.shopify_analytic_account_id and \
                                                     self.shopify_analytic_account_id.id or False
-            values["shopify_analytic_tag_ids"] = [(6, 0, self.shopify_analytic_tag_ids.ids)]
+            # values["shopify_analytic_tag_ids"] = [(6, 0, self.shopify_analytic_tag_ids.ids)]
             values['shopify_lang_id'] = self.shopify_lang_id and self.shopify_lang_id.id or False
             values['order_visible_currency'] = self.order_visible_currency or False
             values['is_shopify_digest'] = self.is_shopify_digest or False
@@ -582,7 +582,7 @@ class ResConfigSettings(models.TransientModel):
                                          self.shopify_credit_tax_account_id.id or False,
                 'import_order_after_date': self.shopify_import_order_after_date,
                 'shopify_analytic_account_id': self.shopify_analytic_account_id.id or False,
-                'shopify_analytic_tag_ids': self.shopify_analytic_tag_ids.ids or False,
+                # 'shopify_analytic_tag_ids': self.shopify_analytic_tag_ids.ids or False,
                 'shopify_lang_id': self.shopify_lang_id and self.shopify_lang_id.id or False,
             }
 

@@ -130,17 +130,17 @@
                                class="ml-2 o_doc_link o_onboard_doc_link"/>
                         </div>
                     </div>
-                    <div class="col-xs-12 col-md-6 o_setting_box o_onboard_setting_box"
-                         groups="analytic.group_analytic_tags">
-                        <div class="ml-2 pl-1">
-                            <label for="shopify_analytic_tag_ids" class="o_onboard_label"/>
-                            <field name="shopify_analytic_tag_ids" class="o_light_label o_onboard_input"
-                                   widget="many2many_tags"/>
-                            <a href="javascript:void(0)"
-                               title="- Set the Analytic Tags for shopify orders line. &#013;Note :- The configuration of the analytic tags for this instance will be applied to all sales orders created by the connector. With this configuration, the Analytic Default Rule configured in Odoo will not apply to Shopify orders invoices. If you wish to use Odoo Analytic Default Rule, you will not have to configure any analytic tags here."
-                               class="ml-2 o_doc_link o_onboard_doc_link"/>
-                        </div>
-                    </div>
+<!--                    <div class="col-xs-12 col-md-6 o_setting_box o_onboard_setting_box"-->
+<!--                         groups="analytic.group_analytic_tags">-->
+<!--                        <div class="ml-2 pl-1">-->
+<!--                            <label for="shopify_analytic_tag_ids" class="o_onboard_label"/>-->
+<!--                            <field name="shopify_analytic_tag_ids" class="o_light_label o_onboard_input"-->
+<!--                                   widget="many2many_tags"/>-->
+<!--                            <a href="javascript:void(0)"-->
+<!--                               title="- Set the Analytic Tags for shopify orders line. &#013;Note :- The configuration of the analytic tags for this instance will be applied to all sales orders created by the connector. With this configuration, the Analytic Default Rule configured in Odoo will not apply to Shopify orders invoices. If you wish to use Odoo Analytic Default Rule, you will not have to configure any analytic tags here."-->
+<!--                               class="ml-2 o_doc_link o_onboard_doc_link"/>-->
+<!--                        </div>-->
+<!--                    </div>-->
                     <div class="col-xs-12 col-md-6 o_setting_box o_onboard_setting_box">
                         <div class="ml-2 pl-1">
                             <field name="shopify_is_use_default_sequence"

@@ -292,8 +292,8 @@ class ShopifyInstanceEpt(models.Model):
     # Analytic
     shopify_analytic_account_id = fields.Many2one('account.analytic.account', string='Analytic Account',
                                                   domain="['|', ('company_id', '=', False), ('company_id', '=', shopify_company_id)]")
-    shopify_analytic_tag_ids = fields.Many2many('account.analytic.tag', string='Analytic Tags',
-                                                domain="['|', ('company_id', '=', False), ('company_id', '=', shopify_company_id)]")
+    # shopify_analytic_tag_ids = fields.Many2many('account.analytic.tag', string='Analytic Tags',
+    #                                             domain="['|', ('company_id', '=', False), ('company_id', '=', shopify_company_id)]")
     shopify_lang_id = fields.Many2one('res.lang', string='Language', default=_get_default_language)
 
     # presentment currency

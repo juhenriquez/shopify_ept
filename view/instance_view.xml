@@ -258,9 +258,9 @@
                                 <group groups="analytic.group_analytic_accounting">
                                     <field name="shopify_analytic_account_id" readonly="1"/>
                                 </group>
-                                <group groups="analytic.group_analytic_tags">
-                                    <field name="shopify_analytic_tag_ids" widget="many2many_tags" readonly="1"/>
-                                </group>
+<!--                                <group groups="analytic.group_analytic_tags">-->
+<!--                                    <field name="shopify_analytic_tag_ids" widget="many2many_tags" readonly="1"/>-->
+<!--                                </group>-->
                             </group>
                         </page>
                     </notebook>
