@@ -4,7 +4,7 @@ import os
 import zipfile
 from odoo import models, fields, api, _, SUPERUSER_ID
 from odoo.exceptions import UserError
-from odoo.addons.website.tools import get_video_embed_code
+from odoo.addons.web_editor.tools import get_video_embed_code
 from .. import shopify
 
 
