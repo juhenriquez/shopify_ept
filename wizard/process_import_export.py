@@ -17,7 +17,7 @@ from odoo.tools.misc import split_every
 from odoo import models, fields, api, _
 from .. import shopify
 from ..shopify.pyactiveresource.connection import ClientError
-from odoo.addons.website.tools import get_video_embed_code
+from odoo.addons.web_editor.tools import get_video_embed_code
 
 _logger = logging.getLogger("Shopify Operations")
 
