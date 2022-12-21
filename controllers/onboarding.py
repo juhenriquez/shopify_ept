@@ -31,7 +31,7 @@ class ShopifyOnboarding(http.Controller):
         if request.env.uid not in shopify_manager_group.users.ids:
             return {}
         return {
-            'html': request.env.ref('shopify_ept.shopify_instances_onboarding_panel_ept')._render({
+            'html': request.env['ir.qweb']._render('shopify_ept.shopify_instances_onboarding_panel_ept', {
                 'company': company,
                 'toggle_company_id': company.id,
                 'hide_panel': hide_panel,
