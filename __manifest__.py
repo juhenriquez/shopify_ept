@@ -20,7 +20,7 @@
     'data': [
         'security/group.xml',
         'security/ir.model.access.csv',
-        'view/assets.xml',
+        # 'view/assets.xml',
         'view/instance_view.xml',
         'wizard/res_config_view.xml',
         'data/import_order_status.xml',
@@ -63,6 +63,11 @@
         'view/export_stock_queue_line_view.xml',
     ],
     'demo_xml': [],
+    "assets": {
+        "web.assets_backend": [
+            "shopify_ept/static/src/js/shopify_button_collapse.js",
+        ]
+    },
     # cloc settings
     'cloc_exclude': ["shopify/**/*", "**/*.xml", ],
 
