@@ -17,7 +17,7 @@
                             <div class="o_kanban_card_header">
                                 <div class="o_kanban_card_header_title">
                                     <div class="o_primary">
-                                        <t t-esc="record.name.value"/>
+                                        <t t-out="record.name.value"/>
                                     </div>
                                     <div class="o_kanban_manage_button_section">
                                         <a class="o_kanban_manage_toggle_button" href="#">
@@ -28,8 +28,7 @@
                                 </div>
                             </div>
                             <div>
-                                <field name="shopify_order_data"
-                                       graph_type="line" widget="dashboard_graph_ept"/>
+                                <field name="shopify_order_data" graph_type="line" widget="dashboard_graph_ept"/>
                             </div>
                             <div
                                     class="container o_kanban_card_manage_pane dropdown-menu"
@@ -169,8 +168,7 @@
         </field>
     </record>
 
-    <record id="shopify_kanban_action_ept"
-            model="ir.actions.act_window">
+    <record id="shopify_kanban_action_ept" model="ir.actions.act_window">
         <field name="name">Shopify Dashboard</field>
         <field name="res_model">shopify.instance.ept</field>
         <field name="view_mode">kanban</field>

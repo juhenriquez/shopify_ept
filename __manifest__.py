@@ -20,6 +20,7 @@
     'data': [
         'security/group.xml',
         'security/ir.model.access.csv',
+        'view/assets.xml',
         'view/instance_view.xml',
         'wizard/res_config_view.xml',
         'data/import_order_status.xml',
@@ -82,9 +83,4 @@
     'live_test_url': 'https://www.emiprotechnologies.com/free-trial?app=shopify-ept&version=15&edition=enterprise',
     'price': 379.00,
     'currency': 'EUR',
-    'assets': {
-        'web.assets_backend': [
-            'shopify_ept/static/src/js/shopify_button_collapse.js'
-        ],
-    },
 }
