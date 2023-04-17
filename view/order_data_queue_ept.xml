@@ -118,10 +118,6 @@
                             <label for="create_date" string="Imported at"/>
                             <field name="create_date" nolabel="1"/>
                         </group>
-                        <group>
-                            <field name="shopify_order_common_log_book_id" string="Log Book"
-                                   readonly="1"/>
-                        </group>
                     </group>
                     <notebook>
                         <page string="Data Lines">
@@ -178,8 +174,8 @@
                        decoration-warning="state == 'partially_completed'" decoration-danger="state == 'failed'"
                        widget="badge"/>
                 <field name="is_action_require" invisible="1"/>
-                <button string="Need manual interaction" icon="fa-exclamation-triangle text-danger"
-                        attrs="{'invisible': ['|',('is_action_require','=',False),('state','=','done')]}"
+                <button title="Need manual interaction" icon="fa-exclamation-triangle text-danger"
+                        attrs="{'invisible': ['|',('is_action_require','=',False),('state','=','completed')]}"
                         special="cancel"/>
                 <field name="is_process_queue" invisible="1"/>
                 <field name="running_status"

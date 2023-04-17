@@ -60,8 +60,8 @@ class ShopifyCronConfigurationEpt(models.TransientModel):
 
     # Auto cron for Import Shipped Order
     shopify_shipped_order_auto_import = fields.Boolean('Import Shipped Order', default=False,
-                                                       help="Check if you want to automatically Import Shipped Orders from Shopify to"
-                                                            " Odoo.")
+                                                       help="Check if you want to automatically "
+                                                            "Import Shipped Orders from Shopify to Odoo.")
     shopify_import_shipped_order_interval_number = fields.Integer('Interval Number for Import Shipped Order',
                                                                   help="Repeat every x.")
     shopify_import_shipped_order_interval_type = fields.Selection([('minutes', 'Minutes'), ('hours', 'Hours'),
@@ -196,7 +196,8 @@ class ShopifyCronConfigurationEpt(models.TransientModel):
 
     def import_shipped_order_cron_field(self, instance):
         """
-        Set import shipped order cron fields value while open the wizard for cron configuration from the instance form view.
+        Set import shipped order cron fields value while open the wizard for cron
+        configuration from the instance form view.
         @author: Meera Sidapara @Emipro Technologies Pvt. Ltd on date 01/11/2021.
         """
         try:
@@ -213,7 +214,8 @@ class ShopifyCronConfigurationEpt(models.TransientModel):
 
     def import_cancel_order_cron_field(self, instance):
         """
-        Set import cancel order cron fields value while open the wizard for cron configuration from the instance form view.
+        Set import cancel order cron fields value while open the wizard for cron
+        configuration from the instance form view.
         @author: Meera Sidapara @Emipro Technologies Pvt. Ltd on date 17/03/2022.
         """
         try:

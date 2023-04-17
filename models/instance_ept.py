@@ -134,6 +134,15 @@ class ShopifyInstanceEpt(models.Model):
         return order_after_date
 
     @api.model
+    def _default_UOM_category(self):
+        product_weight_in_lbs_param = self.env['ir.config_parameter'].sudo().get_param('product.weight_in_lbs')
+        if product_weight_in_lbs_param == '1':
+            uom = self.env.ref('uom.product_uom_lb')
+        else:
+            uom = self.env.ref('uom.product_uom_kgm')
+        return uom
+
+    @api.model
     def _get_default_language(self):
         lang_code = self.env.user.lang
         language = self.env["res.lang"].search([('code', '=', lang_code)])
@@ -291,9 +300,11 @@ class ShopifyInstanceEpt(models.Model):
                                      help="This is used for set Tip product in a sale order lines")
     # Analytic
     shopify_analytic_account_id = fields.Many2one('account.analytic.account', string='Analytic Account',
-                                                  domain="['|', ('company_id', '=', False), ('company_id', '=', shopify_company_id)]")
+                                                  domain="['|', ('company_id', '=', False), "
+                                                         "('company_id', '=', shopify_company_id)]")
     # shopify_analytic_tag_ids = fields.Many2many('account.analytic.tag', string='Analytic Tags',
-    #                                             domain="['|', ('company_id', '=', False), ('company_id', '=', shopify_company_id)]")
+    #                                             domain="['|', ('company_id', '=', False),
+    #                                             ('company_id', '=', shopify_company_id)]")
     shopify_lang_id = fields.Many2one('res.lang', string='Language', default=_get_default_language)
 
     # presentment currency
@@ -309,6 +320,10 @@ class ShopifyInstanceEpt(models.Model):
     delivery_fee_name = fields.Char(string='Delivery fee name')
 
     is_delivery_multi_warehouse = fields.Boolean(string="Is Delivery from Multiple warehouse?")
+    import_customer_as_company = fields.Boolean(string="Import customer as a Company")
+    shopify_product_uom_id = fields.Many2one('uom.uom', string='Unit of Measure',
+                                             default=_default_UOM_category,
+                                             )
 
     _sql_constraints = [('unique_host', 'unique(shopify_host)',
                          "Instance already exists for given host. Host must be Unique for the instance!")]
@@ -781,10 +796,10 @@ class ShopifyInstanceEpt(models.Model):
         Added on: 29/10/20
         :return: shopify logs action details
         """
-        view = self.env.ref('shopify_ept.action_common_log_book_ept_shopify').sudo().read()[0]
+        view = self.env.ref('shopify_ept.action_shopify_common_log_line_ept').sudo().read()[0]
         return self.prepare_action(view, [('shopify_instance_id', '=', record_id)])
 
-    @api.model
+    @api.model_create_multi
     def create(self, vals):
         """
         Inherited for creating generic POS customer.
@@ -792,15 +807,16 @@ class ShopifyInstanceEpt(models.Model):
         @author: Maulik Barad on date 25-Feb-2020.
         """
         res_partner_obj = self.env["res.partner"]
-        if vals.get("shopify_host").endswith('/'):
-            vals["shopify_host"] = vals.get("shopify_host").rstrip('/')
+        for val in vals:
+            if val.get("shopify_host").endswith('/'):
+                val["shopify_host"] = val.get("shopify_host").rstrip('/')
 
-        customer_vals = {"name": "POS Customer(%s)" % vals.get("name"), "customer_rank": 1}
-        customer = res_partner_obj.create(customer_vals)
+            customer_vals = {"name": "POS Customer(%s)" % val.get("name"), "customer_rank": 1}
+            customer = res_partner_obj.create(customer_vals)
 
-        sales_team = self.create_sales_channel(vals.get('name'))
+            sales_team = self.create_sales_channel(val.get('name'))
 
-        vals.update({"shopify_default_pos_customer_id": customer.id, "shopify_section_id": sales_team.id})
+            val.update({"shopify_default_pos_customer_id": customer.id, "shopify_section_id": sales_team.id})
         return super(ShopifyInstanceEpt, self).create(vals)
 
     def create_sales_channel(self, name):
@@ -864,9 +880,9 @@ class ShopifyInstanceEpt(models.Model):
         """
         shop = host.split("//")
         if len(shop) == 2:
-            shop_url = shop[0] + "//" + api_key + ":" + password + "@" + shop[1] + "/admin/api/2022-01"
+            shop_url = shop[0] + "//" + api_key + ":" + password + "@" + shop[1] + "/admin/api/2023-01"
         else:
-            shop_url = "https://" + api_key + ":" + password + "@" + shop[0] + "/admin/api/2022-01"
+            shop_url = "https://" + api_key + ":" + password + "@" + shop[0] + "/admin/api/2023-01"
 
         return shop_url
 

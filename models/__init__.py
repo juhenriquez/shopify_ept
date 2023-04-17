@@ -8,7 +8,6 @@ from . import shopify_product_ept
 from . import common_product_image_ept
 from . import product_data_queue
 from . import product_data_queue_line
-from . import common_log_book_ept
 from . import common_log_lines_ept
 from . import order_data_queue_ept
 from . import order_data_queue_line_ept

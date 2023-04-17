@@ -15,7 +15,7 @@
                                    options="{'no_create':True,'no_create_edit':True}"/>
                         </group>
                     </group>
-                    <group>
+                    <div>
                         <div style="color:#000000" id="export_products_note">
                             <p class="alert alert-warning" role="alert">
                                 <u>
@@ -64,7 +64,7 @@
                                 </b>
                             </p>
                         </div>
-                    </group>
+                    </div>
 
                     <footer>
                         <button name="prepare_product_for_export"

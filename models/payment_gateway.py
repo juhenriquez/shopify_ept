@@ -66,20 +66,17 @@ class ShopifyPaymentGateway(models.Model):
                                                    'shopify_instance_id': instance.id})
         return shopify_payment_gateway
 
-    def shopify_search_create_gateway_workflow(self, instance, order_data_queue_line, order_response, log_book_id,
+    def shopify_search_create_gateway_workflow(self, instance, order_data_queue_line, order_response,
                                                gateway):
         """
         This method used to search or create a payment gateway and workflow in odoo when importing orders from
         Shopify to Odoo.
         :param order_data_queue_line: Record of order data queue line
-        :param log_book_id: Record of log book.
         @return: gateway, workflow
         @author: Haresh Mori @Emipro Technologies Pvt. Ltd on date 12/11/2019.
         Task Id : 157350
         """
         common_log_line_obj = self.env["common.log.lines.ept"]
-        model = "sale.order"
-        model_id = common_log_line_obj.get_model_id(model)
         auto_workflow_id = False
 
         shopify_payment_gateway = self.search_or_create_payment_gateway(instance, gateway)
@@ -99,9 +96,11 @@ class ShopifyPaymentGateway(models.Model):
                                                                                       gateway,
                                                                                       order_response.get(
                                                                                           'financial_status'))
-            common_log_line_obj.shopify_create_order_log_line(message, model_id,
-                                                              order_data_queue_line, log_book_id,
-                                                              order_response.get('name'))
+            common_log_line_obj.create_common_log_line_ept(shopify_instance_id=instance.id, message=message,
+                                                           model_name='sale.order',
+                                                           order_ref=order_response.get('name'),
+                                                           shopify_order_data_queue_line_id=order_data_queue_line.id
+                                                           if order_data_queue_line else False)
             if order_data_queue_line:
                 order_data_queue_line.write({'state': 'failed', 'processed_at': datetime.now()})
             return shopify_payment_gateway, auto_workflow_id, False
@@ -115,9 +114,11 @@ class ShopifyPaymentGateway(models.Model):
                       "\n- Please review the Auto workflow configuration here : " \
                       "Shopify > Configuration > Sale Auto " \
                       "Workflow" % auto_workflow_id.name
-            common_log_line_obj.shopify_create_order_log_line(message, model_id,
-                                                              order_data_queue_line, log_book_id,
-                                                              order_response.get('name'))
+            common_log_line_obj.create_common_log_line_ept(shopify_instance_id=instance.id, message=message,
+                                                           model_name='sale.order',
+                                                           order_ref=order_response.get('name'),
+                                                           shopify_order_data_queue_line_id=order_data_queue_line.id
+                                                           if order_data_queue_line else False)
             if order_data_queue_line:
                 order_data_queue_line.write({'state': 'failed', 'processed_at': datetime.now()})
             auto_workflow_id = False

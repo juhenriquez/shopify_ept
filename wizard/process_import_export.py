@@ -6,18 +6,17 @@ import csv
 import logging
 import time
 import os
-import xlrd
-
-from datetime import datetime, timedelta
 from io import StringIO, BytesIO
+from datetime import datetime, timedelta
+import xlrd
 
 from odoo.exceptions import UserError
 from odoo.tools.misc import split_every
 
 from odoo import models, fields, api, _
+from odoo.addons.web_editor.tools import get_video_embed_code
 from .. import shopify
 from ..shopify.pyactiveresource.connection import ClientError
-from odoo.addons.web_editor.tools import get_video_embed_code
 
 _logger = logging.getLogger("Shopify Operations")
 
@@ -36,11 +35,13 @@ class ShopifyProcessImportExport(models.TransientModel):
          ("import_cancel_orders", "Import Cancel Orders"),
          ("import_orders_by_remote_ids", "Import Specific Order(s)"),
          ("update_order_status", "Export Shippment Information/Update Order Status"),
-         ("export_stock", "Export Stock"),
          ("import_stock", "Import Stock"),
-         ("import_products_from_csv", "Map Products"),
+         ("export_stock", "Export Stock"),
          ("import_location", "Import Locations"),
-         ("import_payout_report", "Import Payout Report")], default="sync_product", string="Operation")
+         ("import_products_from_csv", "Map Products"),
+         ("import_payout_report", "Import Payout Report")
+         ],
+        default="sync_product", string="Operation")
     orders_from_date = fields.Datetime(string="From Date")
     orders_to_date = fields.Datetime(string="To Date")
     shopify_instance_ids = fields.Many2many("shopify.instance.ept", "shopify_instance_import_export_rel",
@@ -120,14 +121,19 @@ class ShopifyProcessImportExport(models.TransientModel):
                 instance, skip_existing_product=self.skip_existing_product, template_ids=self.shopify_template_ids)
             if product_queue_ids:
                 queue_ids = product_queue_ids
-                product_data_queue = product_data_queue_obj.browse(queue_ids)
-                product_data_queue.product_data_queue_lines.process_product_queue_line_data()
-                _logger.info("Processed product queue : %s of Instance : %s Via Product Template ids Successfully .",
-                             product_data_queue.name, instance.name)
-                if not product_data_queue.product_data_queue_lines:
-                    product_data_queue.unlink()
                 action_name = "shopify_ept.action_shopify_product_data_queue"
                 form_view_name = "shopify_ept.product_synced_data_form_view_ept"
+
+            # if product_queue_ids:
+            #     queue_ids = product_queue_ids
+            #     product_data_queue = product_data_queue_obj.browse(queue_ids)
+            #     product_data_queue.product_data_queue_lines.process_product_queue_line_data()
+            #     _logger.info("Processed product queue : %s of Instance : %s Via Product Template ids Successfully .",
+            #                  product_data_queue.name, instance.name)
+            #     if not product_data_queue.product_data_queue_lines:
+            #         product_data_queue.unlink()
+            #     action_name = "shopify_ept.action_shopify_product_data_queue"
+            #     form_view_name = "shopify_ept.product_synced_data_form_view_ept"
 
         elif self.shopify_operation == "import_customers":
             customer_queues = self.sync_shopify_customers()
@@ -171,11 +177,12 @@ class ShopifyProcessImportExport(models.TransientModel):
                 form_view_name = "shopify_ept.export_stock_form_view_ept"
 
         elif self.shopify_operation == "import_stock":
-            inventory_records = self.import_stock_in_odoo()
-            if inventory_records:
-                queue_ids = inventory_records
-                action_name = "stock.action_inventory_form"
-                form_view_name = "stock.view_inventory_form"
+            self.import_stock_in_odoo()
+            # inventory_records = self.import_stock_in_odoo()
+            # if inventory_records:
+            #     queue_ids = inventory_records
+            #     action_name = "stock.action_inventory_form"
+            #     form_view_name = "stock.view_inventory_form"
 
         elif self.shopify_operation == "update_order_status":
             self.update_order_status()
@@ -344,7 +351,7 @@ class ShopifyProcessImportExport(models.TransientModel):
                                                                                "import_process")
                 customer_data_queue_line_obj.shopify_create_multi_queue(customer_queue, customer_id_chunk)
 
-                message = "Customer Queue created {}".format(customer_queue.name)
+                message = "Customer Queue created %s" % ', '.join(customer_queue.mapped('name'))
                 bus_bus_obj._sendone(self.env.user.partner_id, "simple_notification",
                                      {"title": "Shopify Notification", "message": message, "sticky": False,
                                       "warning": True})
@@ -457,9 +464,9 @@ class ShopifyProcessImportExport(models.TransientModel):
         if products:
             shopify_products = shopify_product_obj.export_stock_in_shopify(instance, products)
             if shopify_products:
-                instance.write({'shopify_last_date_update_stock': shopify_products[0].last_stock_update_date})
+                instance.write({'shopify_last_date_update_stock': datetime.now() - timedelta(hours=2)})
         else:
-            instance.shopify_last_date_update_stock = datetime.now()
+            instance.shopify_last_date_update_stock = datetime.now() - timedelta(hours=2)
             _logger.info("No products found to export stock from %s.....", last_update_date)
 
         return True
@@ -473,9 +480,8 @@ class ShopifyProcessImportExport(models.TransientModel):
         product_obj = self.env['product.product']
         shopify_product_obj = self.env['shopify.product.product.ept']
 
-        if self.shopify_instance_id:
-            instance = self.shopify_instance_id
-        elif ctx.get('shopify_instance_id'):
+        instance = self.shopify_instance_id if self.shopify_instance_id else False
+        if not instance and ctx.get('shopify_instance_id'):
             instance_id = ctx.get('shopify_instance_id')
             instance = shopify_instance_obj.browse(instance_id)
 
@@ -519,8 +525,7 @@ class ShopifyProcessImportExport(models.TransientModel):
                 # shopify_product_obj.with_context(is_process_from_selected_product=True).export_stock_in_shopify(
                 #     instance, odoo_product_ids)
                 export_stock_queue_id = shopify_product_obj.with_context(
-                    is_process_from_selected_product=True).export_stock_queue(
-                    instance, odoo_product_ids)
+                    is_process_from_selected_product=True).export_stock_queue(instance, odoo_product_ids)
                 if export_stock_queue_id:
                     queue_ids = export_stock_queue_id.ids
                     export_stock_data_queue = export_stock_data_obj.browse(queue_ids)
@@ -551,8 +556,9 @@ class ShopifyProcessImportExport(models.TransientModel):
         """
         instance = self.shopify_instance_id
         shopify_product_obj = self.env['shopify.product.product.ept']
-        inventory_records = shopify_product_obj.import_shopify_stock(instance, self.is_auto_validate_inventory)
-        return inventory_records
+        # inventory_records = shopify_product_obj.import_shopify_stock(instance, self.is_auto_validate_inventory)
+        # return inventory_records
+        shopify_product_obj.import_shopify_stock(instance, self.is_auto_validate_inventory)
 
     def update_order_status(self, instance=False):
         """This method is used to call child method for update order status from Odoo to Shopify.
@@ -706,11 +712,9 @@ class ShopifyProcessImportExport(models.TransientModel):
         Task_id:180489 - Prepare for export changes
         """
         prepare_product_for_export_obj = self.env["shopify.prepare.product.for.export.ept"]
-        common_log_obj = self.env["common.log.book.ept"]
         common_log_line_obj = self.env["common.log.lines.ept"]
-        model_id = common_log_line_obj.get_model_id("shopify.product.product.ept")
+        model = "shopify.product.product.ept"
         instance = self.shopify_instance_id
-        log_book_id = common_log_obj.shopify_create_common_log_book("import", instance, model_id)
         sequence = 0
         row_no = 0
         shopify_template_id = False
@@ -720,10 +724,9 @@ class ShopifyProcessImportExport(models.TransientModel):
             if not record["PRODUCT_TEMPLATE_ID"] or not record["PRODUCT_ID"] or not record["CATEGORY_ID"]:
                 message += "PRODUCT_TEMPLATE_ID Or PRODUCT_ID Or CATEGORY_ID Not As Per Odoo Product in file at row " \
                            "%s " % row_no
-                vals = {"message": message,
-                        "model_id": model_id,
-                        "log_book_id": log_book_id.id}
-                common_log_line_obj.create(vals)
+                common_log_line_obj.create_common_log_line_ept(shopify_instance_id=instance.id,
+                                                               message=message,
+                                                               model_name=model)
                 continue
 
             shopify_template, shopify_template_id, sequence = self.create_or_update_shopify_template_from_csv(instance,
@@ -735,8 +738,6 @@ class ShopifyProcessImportExport(models.TransientModel):
                                                                              sequence)
             prepare_product_for_export_obj.create_shopify_variant_images(shopify_template, shopify_variant)
 
-        if not log_book_id.log_lines:
-            log_book_id.unlink()
         return True
 
     def create_or_update_shopify_template_from_csv(self, instance, record, shopify_template_id, sequence):

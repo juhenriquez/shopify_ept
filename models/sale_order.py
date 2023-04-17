@@ -95,19 +95,7 @@ class SaleOrder(models.Model):
                          'unique(shopify_instance_id,shopify_order_id,shopify_order_number)',
                          "Shopify order must be Unique.")]
 
-    def create_shopify_log_line(self, message, queue_line, log_book, order_name):
-        """
-        Creates log line with the message and makes the queue line fail, if queue line is passed.
-        @author: Maulik Barad on Date 11-Sep-2020.
-        """
-        common_log_line_obj = self.env["common.log.lines.ept"]
-
-        common_log_line_obj.shopify_create_order_log_line(message, log_book.model_id.id, queue_line, log_book,
-                                                          order_name)
-        if queue_line:
-            queue_line.write({"state": "failed", "processed_at": datetime.now()})
-
-    def prepare_shopify_customer_and_addresses(self, order_response, pos_order, instance, order_data_line, log_book):
+    def prepare_shopify_customer_and_addresses(self, order_response, pos_order, instance, order_data_line):
         """
         Searches for existing customer in Odoo and creates in odoo, if not found.
         @author: Maulik Barad on Date 11-Sep-2020.
@@ -130,9 +118,14 @@ class SaleOrder(models.Model):
                 message = "Customer details are not available in %s Order." % (order_response.get("order_number"))
             else:
                 partner = order_response.get("customer") and shopify_res_partner_obj.shopify_create_contact_partner(
-                    order_response.get("customer"), instance, False, log_book)
+                    order_response.get("customer"), instance, False)
         if message:
-            self.create_shopify_log_line(message, order_data_line, log_book, order_response.get("name"))
+            self.env["common.log.lines.ept"].create_common_log_line_ept(shopify_instance_id=instance.id,
+                                                                        message=message,
+                                                                        model_name='sale.order',
+                                                                        order_ref=order_response.get('name'),
+                                                                        shopify_order_data_queue_line_id=order_data_line.id if order_data_line else False)
+            order_data_line.write({"state": "failed", "processed_at": datetime.now()})
             _logger.info(message)
             return False, False, False
 
@@ -145,12 +138,16 @@ class SaleOrder(models.Model):
             partner = partner.parent_id
 
         invoice_address = order_response.get("billing_address") and \
-                          shopify_res_partner_obj.shopify_create_or_update_address(
-                              order_response.get("billing_address"), partner, "invoice") or partner
+                          shopify_res_partner_obj.shopify_create_or_update_address(instance,
+                                                                                   order_response.get(
+                                                                                       "billing_address"), partner,
+                                                                                   "invoice") or partner
 
         delivery_address = order_response.get("shipping_address") and \
-                           shopify_res_partner_obj.shopify_create_or_update_address(
-                               order_response.get("shipping_address"), partner, "delivery") or partner
+                           shopify_res_partner_obj.shopify_create_or_update_address(instance,
+                                                                                    order_response.get(
+                                                                                        "shipping_address"), partner,
+                                                                                    "delivery") or partner
 
         # Below condition as per the task 169257.
         if not partner and invoice_address and delivery_address:
@@ -344,7 +341,7 @@ class SaleOrder(models.Model):
                     _logger.info("Created discount line for Odoo order(%s) and Shopify order is (%s)", self.name,
                                  order_number)
 
-    def import_shopify_orders(self, order_data_lines, log_book):
+    def import_shopify_orders(self, order_data_lines, instance):
         """
         This method used to create a sale orders in Odoo.
         @author: Haresh Mori @Emipro Technologies Pvt. Ltd on date 11/11/2019.
@@ -356,7 +353,6 @@ class SaleOrder(models.Model):
         common_log_line_obj = self.env["common.log.lines.ept"]
         order_ids = []
         commit_count = 0
-        instance = log_book.shopify_instance_id
 
         instance.connect_in_shopify()
 
@@ -379,38 +375,45 @@ class SaleOrder(models.Model):
                           "%s. \n Please check the order after date in shopify configuration." % (order_number,
                                                                                                   date_order)
                 _logger.info(message)
-                self.create_shopify_log_line(message, order_data_line, log_book, order_response.get("name"))
+                common_log_line_obj.create_common_log_line_ept(shopify_instance_id=instance.id, message=message,
+                                                               model_name='sale.order',
+                                                               order_ref=order_response.get("name"),
+                                                               shopify_order_data_queue_line_id=order_data_line.id if order_data_line else False)
+                order_data_line.write({'state': 'failed', 'processed_at': datetime.now()})
                 continue
 
             sale_order = self.search_existing_shopify_order(order_response, instance, order_number)
 
             if sale_order:
                 order_data_line.write({"state": "done", "processed_at": datetime.now(),
-                                       "sale_order_id": sale_order.id})
+                                       "sale_order_id": sale_order.id, "order_data": False})
                 _logger.info("Done the Process of order Because Shopify Order(%s) is exist in Odoo and Odoo order is("
                              "%s)", order_number, sale_order.name)
                 continue
 
             pos_order = order_response.get("source_name", "") == "pos"
             partner, delivery_address, invoice_address = self.prepare_shopify_customer_and_addresses(
-                order_response, pos_order, instance, order_data_line, log_book)
+                order_response, pos_order, instance, order_data_line)
             if not partner:
                 continue
 
             lines = order_response.get("line_items")
-            if self.check_mismatch_details(lines, instance, order_number, order_data_line, log_book):
+            if self.check_mismatch_details(lines, instance, order_number, order_data_line):
                 _logger.info("Mismatch details found in this Shopify Order(%s) and id (%s)", order_number,
                              order_response.get("id"))
                 order_data_line.write({"state": "failed", "processed_at": datetime.now()})
                 continue
 
             sale_order = self.shopify_create_order(instance, partner, delivery_address, invoice_address,
-                                                   order_data_line, order_response, log_book, lines, order_number)
+                                                   order_data_line, order_response, lines, order_number)
             if not sale_order:
                 message = "Configuration missing in Odoo while importing Shopify Order(%s) and id (%s)" % (
                     order_number, order_response.get("id"))
                 _logger.info(message)
-                self.create_shopify_log_line(message, order_data_line, log_book, order_response.get("name"))
+                common_log_line_obj.create_common_log_line_ept(shopify_instance_id=instance.id, message=message,
+                                                               model_name='sale.order',
+                                                               order_ref=order_response.get('name'),
+                                                               shopify_order_data_queue_line_id=order_data_line.id if order_data_line else False)
                 continue
             order_ids.append(sale_order.id)
 
@@ -436,8 +439,7 @@ class SaleOrder(models.Model):
             message = ""
             try:
                 if sale_order.shopify_order_status == "fulfilled":
-                    sale_order.auto_workflow_process_id.with_context(
-                        log_book_id=log_book.id).shipped_order_workflow_ept(sale_order)
+                    sale_order.auto_workflow_process_id.shipped_order_workflow_ept(sale_order)
                     if order_data_line and order_data_line.shopify_order_data_queue_id.created_by == "scheduled_action":
                         created_by = 'Scheduled Action'
                     else:
@@ -448,7 +450,7 @@ class SaleOrder(models.Model):
                 elif not sale_order.is_risky_order:
                     if sale_order.shopify_order_status == "partial":
                         sale_order.process_order_fullfield_qty(order_response)
-                        sale_order.with_context(log_book_id=log_book.id).process_orders_and_invoices_ept()
+                        sale_order.process_orders_and_invoices_ept()
                         if order_data_line and order_data_line.shopify_order_data_queue_id.created_by == \
                                 "scheduled_action":
                             created_by = 'Scheduled Action'
@@ -458,26 +460,30 @@ class SaleOrder(models.Model):
                         message = self.create_shipped_order_refund(shopify_financial_status, order_response, sale_order,
                                                                    created_by)
                     else:
-                        sale_order.with_context(log_book_id=log_book.id).process_orders_and_invoices_ept()
+                        sale_order.process_orders_and_invoices_ept()
             except Exception as error:
                 if order_data_line:
                     order_data_line.write({"state": "failed", "processed_at": datetime.now(),
                                            "sale_order_id": sale_order.id})
                 message = "Receive error while process auto invoice workflow, Error is:  (%s)" % (error)
                 _logger.info(message)
-                self.create_shopify_log_line(message, order_data_line, log_book, order_response.get("name"))
+                common_log_line_obj.create_common_log_line_ept(shopify_instance_id=instance.id, message=message,
+                                                               model_name=self._name,
+                                                               order_ref=order_response.get("name"),
+                                                               shopify_order_data_queue_line_id=order_data_line.id if order_data_line else False)
                 continue
             _logger.info("Done auto workflow process for Odoo order(%s) and Shopify order is (%s)", sale_order.name,
                          order_number)
 
             if message:
-                model_id = common_log_line_obj.get_model_id(self._name)
-                common_log_line_obj.shopify_create_order_log_line(message, model_id,
-                                                                  order_data_line, log_book)
+                common_log_line_obj.create_common_log_line_ept(shopify_instance_id=instance.id, message=message,
+                                                               model_name=self._name,
+                                                               order_ref=order_response.get("name"),
+                                                               shopify_order_data_queue_line_id=order_data_line.id if order_data_line else False)
                 order_data_line.write({'state': 'failed', 'processed_at': datetime.now()})
             else:
                 order_data_line.write({"state": "done", "processed_at": datetime.now(),
-                                       "sale_order_id": sale_order.id})
+                                       "sale_order_id": sale_order.id, "order_data": False})
             _logger.info("Processed the Odoo Order %s process and Shopify Order (%s)", sale_order.name, order_number)
 
         return order_ids
@@ -537,25 +543,6 @@ class SaleOrder(models.Model):
                                                                      order_response.get('name'), created_by,
                                                                      shopify_financial_status)
             self.prepare_vals_shopify_multi_payment_refund(order_response.get("refunds"), sale_order)
-            # refunded = sale_order.create_shopify_refund(order_response.get("refunds"), total_refund, created_by)
-            # if refunded[0] == 0:
-            #     message = "- Refund can only be generated if it's related order " \
-            #               "invoice is found.\n- For order [%s], system could not find the " \
-            #               "related order invoice. " % (order_response.get('name'))
-            # elif refunded[0] == 2:
-            #     message = "- Refund can only be generated if it's related order " \
-            #               "invoice is in 'Post' status.\n- For order [%s], system found " \
-            #               "related invoice but it is not in 'Post' status." % (
-            #                   order_response.get('name'))
-            # elif refunded[0] == 3:
-            #     message = "- Partial refund is received from Shopify for order [%s].\n " \
-            #               "- System do not process partial refunds.\n" \
-            #               "- Either create partial refund manually in Odoo or do full " \
-            #               "refund in Shopify." % (order_response.get('name'))
-        # elif shopify_financial_status == "partially_refunded" and order_response.get("refunds"):
-        #     message = sale_order.create_shopify_partially_refund(order_response.get("refunds"),
-        #                                                          order_response.get('name'), created_by)
-        # self.prepare_vals_shopify_multi_payment_refund(order_response.get("refunds"), sale_order)
         return message
 
     def prepare_vals_shopify_multi_payment_refund(self, order_refunds, order):
@@ -590,14 +577,14 @@ class SaleOrder(models.Model):
 
         return sale_order
 
-    def check_mismatch_details(self, lines, instance, order_number, order_data_queue_line,
-                               log_book_id):
+    def check_mismatch_details(self, lines, instance, order_number, order_data_queue_line):
         """This method used to check the mismatch details in the order lines.
             @param : self, lines, instance, order_number, order_data_queue_line
             @author: Haresh Mori @Emipro Technologies Pvt. Ltd on date 11/11/2019.
             Task Id : 157350
         """
         shopify_product_template_obj = self.env["shopify.product.template.ept"]
+        common_log_line_obj = self.env["common.log.lines.ept"]
         mismatch = False
 
         for line in lines:
@@ -612,7 +599,9 @@ class SaleOrder(models.Model):
                 message = "Please upgrade the module and then try to import order(%s).\n Maybe the Gift Card " \
                           "product " \
                           "has been deleted, it will be recreated at the time of module upgrade." % order_number
-                self.create_shopify_log_line(message, order_data_queue_line, log_book_id, order_number)
+                common_log_line_obj.create_common_log_line_ept(shopify_instance_id=instance.id, message=message,
+                                                               model_name='sale.order', order_ref=order_number,
+                                                               shopify_order_data_queue_line_id=order_data_queue_line.id if order_data_queue_line else False)
                 mismatch = True
                 break
 
@@ -621,13 +610,15 @@ class SaleOrder(models.Model):
                 line_product_id = line.get("product_id", False)
                 if line_product_id and line_variant_id:
                     shopify_product_template_obj.shopify_sync_products(False, line_product_id,
-                                                                       instance, log_book_id,
+                                                                       instance,
                                                                        order_data_queue_line)
                     shopify_variant = self.search_shopify_variant(line, instance)
                     if not shopify_variant:
                         message = "Product [%s][%s] not found for Order %s" % (
                             line.get("sku"), line.get("name"), order_number)
-                        self.create_shopify_log_line(message, order_data_queue_line, log_book_id, order_number)
+                        common_log_line_obj.create_common_log_line_ept(shopify_instance_id=instance.id, message=message,
+                                                                       model_name='sale.order', order_ref=order_number,
+                                                                       shopify_order_data_queue_line_id=order_data_queue_line.id if order_data_queue_line else False)
                         mismatch = True
                         break
         return mismatch
@@ -653,7 +644,7 @@ class SaleOrder(models.Model):
         return shopify_variant
 
     def shopify_create_order(self, instance, partner, shipping_address, invoice_address,
-                             order_data_queue_line, order_response, log_book_id, lines, order_number):
+                             order_data_queue_line, order_response, lines, order_number):
         """This method used to create a sale order and it's line.
             @param : self, instance, partner, shipping_address, invoice_address,order_data_queue_line, order_response
             @return: order
@@ -666,7 +657,7 @@ class SaleOrder(models.Model):
         gateway = order_response.get('gateway') or "no_payment_gateway"
         payment_gateway, workflow, payment_term = \
             payment_gateway_obj.shopify_search_create_gateway_workflow(instance, order_data_queue_line, order_response,
-                                                                       log_book_id, gateway)
+                                                                       gateway)
 
         if not all([payment_gateway, workflow]):
             return False
@@ -678,7 +669,7 @@ class SaleOrder(models.Model):
         order_vals.update({'payment_term_id': payment_term and payment_term.id or False})
         if len(order_response.get('payment_gateway_names')) > 1:
             payment_vals = self.prepare_vals_shopify_multi_payment(instance, order_data_queue_line, order_response,
-                                                                   log_book_id, payment_gateway, workflow)
+                                                                   payment_gateway, workflow)
             if not payment_vals:
                 return False
             order_vals.update({'shopify_payment_ids': payment_vals, 'is_shopify_multi_payment': True})
@@ -699,7 +690,28 @@ class SaleOrder(models.Model):
 
         if instance.is_delivery_multi_warehouse:
             self.set_line_warehouse_based_on_location(order, instance)
+        self.set_fulfilment_order_id_and_fulfillment_line_id(order, instance)
         return order
+
+    def set_fulfilment_order_id_and_fulfillment_line_id(self, order, instance):
+        """
+        This method sets order line warehouse based on Shopify Location.
+        @author:Meera Sidapara @Emipro Technologies Pvt. Ltd on date 07 September 2022.
+        Task Id : 199989 - Fulfillment location wise order
+        """
+        shopify_order_id = order.shopify_order_id
+        order_line = order.order_line.filtered(lambda line_item: line_item.shopify_fulfillment_line_id)
+        if not order_line:
+            shopify_order = shopify.Order().find(shopify_order_id)
+            fulfillment_data = shopify_order.get('fulfillment_orders')
+            for data in fulfillment_data:
+                for line in data.get('line_items'):
+                    order_line = order.order_line.filtered(
+                        lambda line_item: line_item.shopify_line_id == str(line.get('line_item_id')))
+                    order_line.write(
+                        {'shopify_fulfillment_order_id': line.get('fulfillment_order_id'),
+                         'shopify_fulfillment_line_id': line.get('id')})
+        return True
 
     def set_line_warehouse_based_on_location(self, order, instance):
         """
@@ -765,7 +777,7 @@ class SaleOrder(models.Model):
             "pricelist_id": pricelist_id.id if pricelist_id else False,
             "team_id": instance.shopify_section_id.id if instance.shopify_section_id else False,
         }
-        ordervals = self.create_sales_order_vals_ept(ordervals)
+        # ordervals = self.create_sales_order_vals_ept(ordervals)
         order_response_vals = self.prepare_order_vals_from_order_response(order_response, instance, workflow,
                                                                           payment_gateway)
         ordervals.update(order_response_vals)
@@ -809,7 +821,7 @@ class SaleOrder(models.Model):
             Task_id: 167537
             @change : pass tag_ids on vals by Nilam Kubavat for task id : 190111 at 19/05/2022
         """
-        shopify_source_id = self.find_or_create_shopify_source(order_response.get('source_name'))
+        utm_source, utm_medium, utm_campaign = self.set_utm_source_medium_campaign(order_response)
         tags = order_response.get("tags").split(",") if order_response.get("tags") != '' else order_response.get("tags")
         tag_ids = []
         for tag in tags:
@@ -826,10 +838,51 @@ class SaleOrder(models.Model):
             "auto_workflow_process_id": workflow and workflow.id,
             "client_order_ref": order_response.get("name"),
             "analytic_account_id": instance.shopify_analytic_account_id.id if instance.shopify_analytic_account_id else False,
-            "source_id": shopify_source_id.id,
-            "tag_ids": tag_ids
+            "tag_ids": tag_ids,
+            "source_id": utm_source and utm_source.id or False,
+            "medium_id": utm_medium and utm_medium.id or False,
+            "campaign_id": utm_campaign and utm_campaign.id or False
         }
         return order_vals
+
+    def set_utm_source_medium_campaign(self, order_response):
+        """
+        This method use to find or create utm source medium and campaign.
+        @author: Yagnik Joshi @Emipro Technologies Pvt. Ltd on date 24th Feb 2023.
+        Task id: 218869
+        """
+        utm_source_obj = self.env['utm.source']
+        utm_campaign_obj = self.env['utm.campaign']
+        utm_medium_obj = self.env['utm.medium']
+        utm_source = False
+        utm_medium = False
+        utm_campaign = False
+        utm_dict = {}
+        if order_response.get('landing_site') and order_response.get('landing_site').find('utm') >= 0:
+            UTM_data = {sub for sub in order_response.get('landing_site')[1:-1].split("&")}
+            for utm_split in UTM_data:
+                if utm_split.find('utm') >= 0:
+                    utm_dict.update({utm_split.split("=")[0]: utm_split.split("=")[1]})
+
+            if utm_dict.get('utm_source'):
+                utm_source = utm_source_obj.search([('name', '=ilike', utm_dict.get('utm_source'))], limit=1)
+                if not utm_source:
+                    utm_source = utm_source_obj.create({'name': utm_dict.get('utm_source')})
+
+            if utm_dict.get('utm_medium'):
+                utm_medium = utm_medium_obj.search([('name', '=ilike', utm_dict.get('utm_medium'))], limit=1)
+                if not utm_medium:
+                    utm_medium = utm_medium_obj.create({'name': utm_dict.get('utm_medium')})
+
+            if utm_dict.get('utm_campaign'):
+                utm_campaign = utm_campaign_obj.search([('name', '=ilike', utm_dict.get('utm_campaign'))], limit=1)
+                if not utm_campaign:
+                    utm_campaign = utm_campaign_obj.create({'name': utm_dict.get('utm_campaign')})
+
+        if not utm_source:
+            utm_source = self.find_or_create_shopify_source(order_response.get('source_name'))
+
+        return utm_source, utm_medium, utm_campaign
 
     def find_or_create_shopify_source(self, source):
         """
@@ -853,8 +906,7 @@ class SaleOrder(models.Model):
         currency_obj = self.env["res.currency"]
         pricelist_obj = self.env["product.pricelist"]
         order_currency = order_response.get(
-            "presentment_currency") if instance.order_visible_currency else order_response.get(
-            "currency") or False
+            "presentment_currency") if instance.order_visible_currency else order_response.get("currency") or False
         if order_currency:
             currency = currency_obj.search([("name", "=", order_currency)])
             if instance.shopify_pricelist_id.currency_id.id == currency.id:
@@ -911,9 +963,9 @@ class SaleOrder(models.Model):
         sale_order_line_obj = self.env["sale.order.line"]
         instance = self.shopify_instance_id
         line_vals = self.prepare_vals_for_sale_order_line(product, product_name, price, quantity)
-        order_line_vals = sale_order_line_obj.create_sale_order_line_ept(line_vals)
+        # order_line_vals = sale_order_line_obj.create_sale_order_line_ept(line_vals)
         order_line_vals = self.shopify_set_tax_in_sale_order_line(instance, line, order_response, is_shipping,
-                                                                  is_discount, previous_line, order_line_vals,
+                                                                  is_discount, previous_line, line_vals,
                                                                   is_duties)
         if is_discount:
             order_line_vals["name"] = "Discount for " + str(product_name)
@@ -945,9 +997,10 @@ class SaleOrder(models.Model):
             "order_id": self.id,
             "company_id": self.company_id.id,
             "product_uom": uom_id,
-            "name": product_name,
+            # "name": product_name,
             "price_unit": price,
-            "order_qty": quantity,
+            "product_uom_qty": quantity
+            # "order_qty": quantity,
         }
         return line_vals
 
@@ -1054,7 +1107,7 @@ class SaleOrder(models.Model):
 
         return account_tax_id
 
-    def prepare_vals_shopify_multi_payment(self, instance, order_data_queue_line, order_response, log_book_id,
+    def prepare_vals_shopify_multi_payment(self, instance, order_data_queue_line, order_response,
                                            payment_gateway, workflow):
         """ This method is use to prepare a values for the multi payment.
             @author: Meera Sidapara @Emipro Technologies Pvt. Ltd on date 16/11/2021 .
@@ -1063,30 +1116,40 @@ class SaleOrder(models.Model):
         payment_gateway_obj = self.env["shopify.payment.gateway.ept"]
         transactions = shopify.Transaction().find(order_id=order_response.get('id'))
         payment_list_vals = []
+        final_transactions_results = []
         for transaction in transactions:
             result = transaction.to_dict()
-            if result.get('kind') in ['capture', 'sale'] and result.get('status') == 'success':
-                payment_transaction_id = result.get('id')
-                gateway = result.get('gateway')
-                amount = result.get('amount')
-                if order_response.get('gateway') == gateway:
-                    payment_list = (0, 0, {'payment_gateway_id': payment_gateway.id, 'workflow_id': workflow.id,
-                                           'amount': amount, 'payment_transaction_id': payment_transaction_id,
-                                           'remaining_refund_amount': amount})
-                    payment_list_vals.append(payment_list)
-                    continue
-                new_payment_gateway, new_workflow, payment_term = \
-                    payment_gateway_obj.shopify_search_create_gateway_workflow(instance,
-                                                                               order_data_queue_line,
-                                                                               order_response,
-                                                                               log_book_id,
-                                                                               gateway)
-                if not all([new_payment_gateway, new_workflow]):
-                    return False
-                payment_list = (0, 0, {'payment_gateway_id': new_payment_gateway.id, 'workflow_id': new_workflow.id,
+            if result.get('kind') in ['void', 'capture', 'authorization'] and result.get(
+                    'status') == 'success' and result.get('parent_id'):
+                dict_index = next((index for (index, transaction_data) in enumerate(final_transactions_results) if
+                                   transaction_data["id"] == result.get('parent_id')), None)
+                if dict_index != None:
+                    del final_transactions_results[dict_index]
+            if result.get('kind') in ['capture', 'sale', 'authorization'] and result.get('status') == 'success':
+                final_transactions_results.append(result)
+
+        for result in final_transactions_results:
+            # if result.get('kind') in ['capture', 'sale', 'authorization'] and result.get('status') == 'success':
+            payment_transaction_id = result.get('id')
+            gateway = result.get('gateway')
+            amount = result.get('amount')
+            if order_response.get('gateway') == gateway:
+                payment_list = (0, 0, {'payment_gateway_id': payment_gateway.id, 'workflow_id': workflow.id,
                                        'amount': amount, 'payment_transaction_id': payment_transaction_id,
                                        'remaining_refund_amount': amount})
                 payment_list_vals.append(payment_list)
+                continue
+            new_payment_gateway, new_workflow, payment_term = \
+                payment_gateway_obj.shopify_search_create_gateway_workflow(instance,
+                                                                           order_data_queue_line,
+                                                                           order_response,
+                                                                           gateway)
+            if not all([new_payment_gateway, new_workflow]):
+                return False
+            payment_list = (0, 0, {'payment_gateway_id': new_payment_gateway.id, 'workflow_id': new_workflow.id,
+                                   'amount': amount, 'payment_transaction_id': payment_transaction_id,
+                                   'remaining_refund_amount': amount})
+            payment_list_vals.append(payment_list)
         return payment_list_vals
 
     @api.model
@@ -1127,15 +1190,15 @@ class SaleOrder(models.Model):
         @author: Maulik Barad on Date 17-Sep-2020.
         Migration done by Haresh Mori on October 2021
         """
-        shopify_line_ids = not self.is_service_tracking_updated and self.order_line.filtered(
-            lambda l: l.shopify_line_id and l.product_id.type == "service" and not l.is_delivery and not
-            l.is_gift_card_line).mapped("shopify_line_id") or []
+        fulfillment_line_ids = not self.is_service_tracking_updated and self.order_line.filtered(
+            lambda l: l.shopify_fulfillment_line_id and l.product_id.type == "service" and not l.is_delivery and not
+            l.is_gift_card_line).mapped("shopify_fulfillment_line_id") or []
 
         if picking.shopify_instance_id and not picking.shopify_instance_id.auto_fulfill_gift_card_order:
-            shopify_line_ids = not self.is_service_tracking_updated and self.order_line.filtered(
-                lambda l: l.shopify_line_id and l.product_id.type == "service" and
-                          not l.is_delivery).mapped("shopify_line_id") or []
-        moves = picking.move_lines
+            fulfillment_line_ids = not self.is_service_tracking_updated and self.order_line.filtered(
+                lambda l: l.shopify_fulfillment_line_id and l.product_id.type == "service" and
+                          not l.is_delivery).mapped("shopify_fulfillment_line_id") or []
+        moves = picking.move_ids
         product_moves = moves.filtered(lambda x: x.sale_line_id.product_id.id == x.product_id.id and x.state == "done")
         if picking.mapped("package_ids").filtered(lambda l: l.tracking_no):
             tracking_numbers, line_items = self.prepare_tracking_numbers_and_lines_for_multi_tracking_order(
@@ -1143,9 +1206,9 @@ class SaleOrder(models.Model):
         else:
             tracking_numbers, line_items = self.prepare_tracking_numbers_and_lines_for_simple_tracking_order(
                 moves, product_moves, picking)
-        for line in shopify_line_ids:
+        for line in fulfillment_line_ids:
             quantity = sum(
-                self.order_line.filtered(lambda l: l.shopify_line_id == line).mapped("product_uom_qty"))
+                self.order_line.filtered(lambda l: l.shopify_fulfillment_line_id == line).mapped("product_uom_qty"))
             line_items.append({"id": line, "quantity": int(quantity)})
             self.write({"is_service_tracking_updated": True})
 
@@ -1162,16 +1225,16 @@ class SaleOrder(models.Model):
         tracking_numbers = []
         line_items = []
         for move in product_moves.filtered(lambda line: line.product_id.detailed_type == 'product'):
-            shopify_line_id = move.sale_line_id.shopify_line_id
+            fulfillment_line_id = move.sale_line_id.shopify_fulfillment_line_id
 
-            line_items.append({"id": shopify_line_id, "quantity": int(move.product_qty)})
+            line_items.append({"id": fulfillment_line_id, "quantity": int(move.product_qty)})
             tracking_numbers.append(picking.carrier_tracking_ref or "")
 
         kit_sale_lines = moves.filtered(
             lambda x: x.sale_line_id.product_id.id != x.product_id.id and x.state == "done").sale_line_id
         for kit_sale_line in kit_sale_lines:
-            shopify_line_id = kit_sale_line.shopify_line_id
-            line_items.append({"id": shopify_line_id, "quantity": int(kit_sale_line.product_qty)})
+            fulfillment_line_id = kit_sale_line.shopify_fulfillment_line_id
+            line_items.append({"id": fulfillment_line_id, "quantity": int(kit_sale_line.product_qty)})
             tracking_numbers.append(picking.carrier_tracking_ref or "")
 
         return tracking_numbers, line_items
@@ -1188,14 +1251,14 @@ class SaleOrder(models.Model):
         line_items = []
         for move in product_moves:
             total_qty = 0
-            shopify_line_id = move.sale_line_id.shopify_line_id
+            fulfillment_line_id = move.sale_line_id.shopify_fulfillment_line_id
 
             for move_line in move.move_line_ids:
                 tracking_no = move_line.result_package_id.tracking_no or ""
                 total_qty += move_line.qty_done
                 tracking_numbers.append(tracking_no)
 
-            line_items.append({"id": shopify_line_id, "quantity": int(total_qty)})
+            line_items.append({"id": fulfillment_line_id, "quantity": int(total_qty)})
 
         kit_move_lines = moves.filtered(
             lambda x: x.sale_line_id.product_id.id != x.product_id.id and x.state == "done")
@@ -1204,12 +1267,12 @@ class SaleOrder(models.Model):
             if move.sale_line_id.id in existing_sale_line_ids:
                 continue
 
-            shopify_line_id = move.sale_line_id.shopify_line_id
+            fulfillment_line_id = move.sale_line_id.shopify_fulfillment_line_id
             existing_sale_line_ids.append(move.sale_line_id.id)
 
             tracking_no = move.move_line_ids.result_package_id.mapped("tracking_no") or []
             tracking_no = tracking_no[0] if tracking_no else ""
-            line_items.append({"id": shopify_line_id, "quantity": int(move.sale_line_id.product_uom_qty)})
+            line_items.append({"id": fulfillment_line_id, "quantity": int(move.sale_line_id.product_uom_qty)})
             tracking_numbers.append(tracking_no)
 
         return tracking_numbers, line_items
@@ -1230,13 +1293,9 @@ class SaleOrder(models.Model):
         Task Id : 157905
         Migration done by Haresh Mori on October 2021
         """
-        common_log_book_obj = self.env["common.log.book.ept"]
         common_log_line_obj = self.env["common.log.lines.ept"]
-
-        model_id = common_log_line_obj.get_model_id(self._name)
+        log_lines = []
         notify_customer = instance.notify_customer
-        log_book = common_log_book_obj.create_common_log_book("export", 'shopify_instance_id', instance, model_id,
-                                                              'shopify_ept')
         _logger.info(_("Update Order Status process start for '%s' Instance"), instance.name)
 
         instance.connect_in_shopify()
@@ -1259,8 +1318,12 @@ class SaleOrder(models.Model):
                     "\n- This might have happen because user may have done changes in order "
                     "manually, after the order was imported.", sale_order.name))
                 _logger.info(message)
-                self.create_shopify_log_line(message, False, log_book, sale_order.client_order_ref)
+                log_lines.append(
+                    common_log_line_obj.create_common_log_line_ept(shopify_instance_id=instance.id, message=message,
+                                                                   model_name=self._name,
+                                                                   order_ref=sale_order.client_order_ref))
                 continue
+            self.set_fulfilment_order_id_and_fulfillment_line_id(sale_order, instance)
 
             tracking_numbers, line_items = sale_order.prepare_tracking_numbers_and_lines_for_fulfilment(picking)
 
@@ -1268,11 +1331,13 @@ class SaleOrder(models.Model):
                 message = "No order lines found for the update order shipping status for order [%s]" \
                           % sale_order.name
                 _logger.info(message)
-                self.create_shopify_log_line(message, False, log_book, sale_order.client_order_ref)
+                log_lines.append(
+                    common_log_line_obj.create_common_log_line_ept(shopify_instance_id=instance.id, message=message,
+                                                                   model_name=self._name,
+                                                                   order_ref=sale_order.client_order_ref))
                 continue
 
-            shopify_location_id = self.search_shopify_location_for_update_order_status(sale_order, instance, line_items,
-                                                                                       log_book)
+            shopify_location_id = self.search_shopify_location_for_update_order_status(sale_order, instance, line_items)
 
             if not shopify_location_id:
                 continue
@@ -1282,31 +1347,28 @@ class SaleOrder(models.Model):
 
             is_create_mismatch, fulfillment_result, new_fulfillment = self.post_fulfilment_in_shopify(fulfillment_vals,
                                                                                                       sale_order,
-                                                                                                      log_book)
+                                                                                                      instance)
             if is_create_mismatch:
                 continue
 
-            self.process_shopify_fulfilment_result(fulfillment_result, order_response, picking, sale_order, log_book,
+            self.process_shopify_fulfilment_result(instance, fulfillment_result, order_response, picking, sale_order,
                                                    new_fulfillment)
 
             sale_order.shopify_location_id = shopify_location_id
 
-        if not log_book.log_lines:
-            log_book.unlink()
-            log_book = False
-
-        if log_book and instance.is_shopify_create_schedule:
+        if log_lines and instance.is_shopify_create_schedule:
             message = []
             count = 0
-            for log_line in log_book.log_lines:
+            for log_line in log_lines:
                 count += 1
                 if count <= 5:
                     message.append('<' + 'li' + '>' + log_line.message + '<' + '/' + 'li' + '>')
             if count >= 5:
                 message.append(
-                    '<' + 'p' + '>' + 'Please refer the logbook' + '  ' + log_book.name + '  ' + 'check it in more detail' + '<' + '/' + 'p' + '>')
+                    '<' + 'p' + '>' + 'Please refer the logline' + '  ' + log_line.name + '  '
+                    + 'check it in more detail' + '<' + '/' + 'p' + '>')
             note = "\n".join(message)
-            self.create_schedule_activity_against_logbook(log_book, log_book.log_lines, note)
+            self.create_schedule_activity_against_loglines(log_lines, note)
 
         self.closed_at(instance)
         return True
@@ -1325,8 +1387,7 @@ class SaleOrder(models.Model):
                                                 ("updated_in_shopify", "=", False),
                                                 ("state", "=", "done"),
                                                 ("location_dest_id", "in", customer_locations.ids),
-                                                ('is_cancelled_in_shopify', '=', False),
-                                                ('is_manually_action_shopify_fulfillment', '=', False)],
+                                                ('is_cancelled_in_shopify', '=', False)],
                                                order="date")
         return picking_ids
 
@@ -1352,7 +1413,7 @@ class SaleOrder(models.Model):
             _logger.info("Error in Request of shopify order for the fulfilment. Error: %s", Error)
             return True, {}
 
-    def search_shopify_location_for_update_order_status(self, sale_order, instance, line_items, log_book):
+    def search_shopify_location_for_update_order_status(self, sale_order, instance, line_items):
         """ This method is used to search the shopify location for the update order status from Odoo to shopify store.
             @return: shopify_location_id
             @author: Haresh Mori @Emipro Technologies Pvt. Ltd on date 20 October 2020 .
@@ -1363,7 +1424,7 @@ class SaleOrder(models.Model):
         if instance.is_delivery_multi_warehouse:
             line_item_ids = [str(line.get('id')) for line in line_items]
             order_line = sale_order.order_line.filtered(
-                lambda line: line.shopify_line_id in line_item_ids)
+                lambda line: line.shopify_fulfillment_line_id in line_item_ids)
             shopify_location_id = shopify_location_obj.search(
                 [('warehouse_for_order', '=', order_line.warehouse_id_ept.id), ("instance_id", "=", instance.id)])
             return shopify_location_id
@@ -1380,7 +1441,10 @@ class SaleOrder(models.Model):
                           "shipping status." % (
                               instance.name)
                 _logger.info(message)
-                self.create_shopify_log_line(message, False, log_book, sale_order.client_order_ref)
+                self.env["common.log.lines.ept"].create_common_log_line_ept(shopify_instance_id=instance.id,
+                                                                            message=message,
+                                                                            model_name=self._name,
+                                                                            order_ref=sale_order.client_order_ref)
                 return False
 
         return shopify_location_id
@@ -1393,15 +1457,33 @@ class SaleOrder(models.Model):
             Task_id: 167537
             Migration done by Haresh Mori on October 2021
         """
-        fulfillment_vals = {"order_id": sale_order.shopify_order_id,
-                            "location_id": shopify_location_id.shopify_location_id,
-                            "tracking_numbers": list(set(tracking_numbers)),
-                            "tracking_urls": [picking.carrier_tracking_url or ''],
-                            "tracking_company": carrier_name, "line_items": line_items,
-                            "notify_customer": notify_customer}
+        # fulfillment_vals = {"order_id": sale_order.shopify_order_id,
+        #                     "location_id": shopify_location_id.shopify_location_id,
+        #                     "tracking_numbers": list(set(tracking_numbers)),
+        #                     "tracking_urls": [picking.carrier_tracking_url or ''],
+        #                     "tracking_company": carrier_name, "line_items": line_items,
+        #                     "notify_customer": notify_customer}
+        # line_item_ids = list(set(sale_order.order_line.fulfillment_order_id))
+        # line_ids = [lines.get('id') for lines in line_items]
+        tracking_info = {}
+        if carrier_name:
+            tracking_info.update({"company": carrier_name})
+        if picking.carrier_tracking_ref:
+            tracking_info.update({"number": picking.carrier_tracking_ref, "url": picking.carrier_tracking_url or ''})
+        fulfillment_vals = {
+            "location_id": int(shopify_location_id.shopify_location_id),
+            "notify_customer": notify_customer,
+            "line_items_by_fulfillment_order": [
+                {
+                    "fulfillment_order_id": picking.move_ids.sale_line_id[0].shopify_fulfillment_order_id,
+                    "fulfillment_order_line_items": line_items
+                }]
+        }
+        if tracking_info:
+            fulfillment_vals.update({"tracking_info": tracking_info})
         return fulfillment_vals
 
-    def post_fulfilment_in_shopify(self, fulfillment_vals, sale_order, log_book):
+    def post_fulfilment_in_shopify(self, fulfillment_vals, sale_order, instance):
         """ This method is used to post the fulfillment from Odoo to Shopify store.
             @author: Haresh Mori @Emipro Technologies Pvt. Ltd on date 10 November 2020 .
             Task_id: 167930 - Update order status changes as per v13
@@ -1410,7 +1492,7 @@ class SaleOrder(models.Model):
         new_fulfillment = False
         fulfillment_result = False
         try:
-            new_fulfillment = shopify.Fulfillment(fulfillment_vals)
+            new_fulfillment = shopify.fulfillment.FulfillmentV2(fulfillment_vals)
             fulfillment_result = new_fulfillment.save()
             if not fulfillment_result:
                 return False, fulfillment_result, new_fulfillment
@@ -1421,12 +1503,15 @@ class SaleOrder(models.Model):
         except Exception as error:
             message = "%s" % str(error)
             _logger.info(message)
-            self.create_shopify_log_line(message, False, log_book, sale_order.client_order_ref)
+            self.env["common.log.lines.ept"].create_common_log_line_ept(shopify_instance_id=instance.id,
+                                                                        message=message,
+                                                                        model_name=self._name,
+                                                                        order_ref=sale_order.client_order_ref)
             return True, fulfillment_result, new_fulfillment
 
         return False, fulfillment_result, new_fulfillment
 
-    def process_shopify_fulfilment_result(self, fulfillment_result, order_response, picking, sale_order, log_book,
+    def process_shopify_fulfilment_result(self, instance, fulfillment_result, order_response, picking, sale_order,
                                           new_fulfillment):
         """ This method is used to process fulfillment result.
             @author: Haresh Mori @Emipro Technologies Pvt. Ltd on date 10 November 2020 .
@@ -1443,7 +1528,10 @@ class SaleOrder(models.Model):
             message = "Order(%s) status not updated due to some issue in fulfillment request/response:" % (
                 sale_order.name)
             _logger.info(message)
-            self.create_shopify_log_line(message, False, log_book, sale_order.client_order_ref)
+            self.env["common.log.lines.ept"].create_common_log_line_ept(shopify_instance_id=instance.id,
+                                                                        message=message,
+                                                                        model_name=self._name,
+                                                                        order_ref=sale_order.client_order_ref)
             return False
 
         fulfillment_id = ''
@@ -1481,12 +1569,11 @@ class SaleOrder(models.Model):
         return True
 
     @api.model
-    def update_shopify_order(self, queue_lines, log_book, created_by):
+    def update_shopify_order(self, queue_lines, created_by, instance):
         """
         This method will update order as per its status got from Shopify.
         @author: Haresh Mori @Emipro Technologies Pvt. Ltd on date 13-Jan-2020..
         @param queue_lines: Order Data Queue Line.
-        @param log_book: Common Log Book.
         @param created_by: Queue line Created by.
         @return: Updated Sale order.
         """
@@ -1500,7 +1587,7 @@ class SaleOrder(models.Model):
             order = self.search_existing_shopify_order(order_data, shopify_instance, order_data.get("order_number"))
 
             if not order:
-                self.import_shopify_orders(queue_line, log_book)
+                self.import_shopify_orders(queue_line, shopify_instance)
                 return True
 
             # Below condition use for, In shopify store there is full refund.
@@ -1511,30 +1598,6 @@ class SaleOrder(models.Model):
                               "related to it is in the 'Done' status.".format(order.name)
             if shopify_status == "refunded" or "partially_refunded" and order_data.get("refunds"):
                 message = self.create_shipped_order_refund(shopify_status, order_data, order, created_by)
-            #     if not message:
-            #         total_refund = 0.0
-            #         for refund in order_data.get('refunds'):
-            #             for transaction in refund.get('transactions'):
-            #                 if transaction.get('kind') == 'refund' and transaction.get('status') == 'success':
-            #                     total_refund += float(transaction.get('amount'))
-            #         refunded = order.create_shopify_refund(order_data.get("refunds"), total_refund, created_by)
-            #         if refunded[0] == 0:
-            #             message = "- Refund can only be generated if it's related order " \
-            #                       "invoice is found.\n- For order [%s], system could not find the " \
-            #                       "related order invoice. " % (order_data.get('name'))
-            #         elif refunded[0] == 2:
-            #             message = "- Refund can only be generated if it's related order " \
-            #                       "invoice is in 'Post' status.\n- For order [%s], system found " \
-            #                       "related invoice but it is not in 'Post' status." % (
-            #                           order_data.get('name'))
-            #         elif refunded[0] == 3:
-            #             message = "- Partial refund is received from Shopify for order [%s].\n " \
-            #                       "- System do not process partial refunds.\n" \
-            #                       "- Either create partial refund manually in Odoo or do full " \
-            #                       "refund in Shopify." % (order_data.get('name'))
-            # elif shopify_status == "partially_refunded" and order_data.get("refunds"):
-            #     message = order.create_shopify_partially_refund(order_data.get("refunds"), order_data.get('name'),
-            #                                                     created_by)
             # Below condition use for, In shopify store there is fulfilled order.
             elif order_data.get('fulfillment_status') == 'fulfilled':
                 fulfilled = order.fulfilled_shopify_order()
@@ -1544,11 +1607,11 @@ class SaleOrder(models.Model):
                 elif not fulfilled:
                     message = "There is not enough stock to complete Delivery for order [" \
                               "%s]" % order_data.get('name')
-            # self.prepare_vals_shopify_multi_payment_refund(order_data.get("refunds"), order)
             if message:
-                model_id = common_log_line_obj.get_model_id(self._name)
-                common_log_line_obj.shopify_create_order_log_line(message, model_id,
-                                                                  queue_line, log_book)
+                common_log_line_obj.create_common_log_line_ept(shopify_instance_id=instance.id, message=message,
+                                                               model_name='sale.order',
+                                                               order_ref=order_data.get('name'),
+                                                               shopify_order_data_queue_line_id=queue_line.id if queue_line else False)
                 queue_line.write({'state': 'failed', 'processed_at': datetime.now()})
             else:
                 queue_line.state = "done"
@@ -1565,48 +1628,9 @@ class SaleOrder(models.Model):
                 picking_id.message_post(
                     body=_("Order %s has been canceled in the Shopify store.", self.shopify_order_number))
             return False
-        self.action_cancel()
+        self.with_context(disable_cancel_warning=True).action_cancel()
         self.canceled_in_shopify = True
         return True
-
-    # def create_shopify_refund(self, refunds_data, total_refund, created_by=""):
-    #     """
-    #     Creates refund of shopify order, when order is refunded in Shopify.
-    #     It will need invoice created and posted for creating credit note in Odoo, otherwise it will
-    #     create log and generate activity as per configuration.
-    #     @author: Haresh Mori @Emipro Technologies Pvt. Ltd on date 13-Jan-2020..
-    #     @param refunds_data: Data of refunds.
-    #     @param total_refund: Total refund amount.
-    #     @param created_by: created by refund.
-    #     @return:[0] : When no invoice is created.
-    #             [1] : When invoice is not posted.
-    #             [2] : When partial refund was made in Shopify.
-    #             [True]:When credit notes are created or partial refund is done.
-    #     """
-    #     if not self.invoice_ids:
-    #         return [0]
-    #     invoices = self.invoice_ids.filtered(lambda x: x.move_type == "out_invoice")
-    #     refunds = self.invoice_ids.filtered(lambda x: x.move_type == "out_refund")
-    #     refund_date = self.convert_order_date(refunds_data[0])
-    #     if refunds:
-    #         return [True]
-    #
-    #     for invoice in invoices:
-    #         if not invoice.state == "posted":
-    #             return [2]
-    #     if self.amount_total == total_refund:
-    #         move_reversal = self.env["account.move.reversal"].with_context(
-    #             {"active_model": "account.move", "active_ids": invoices[0].ids}).create(
-    #             {"refund_method": "refund", "date": refund_date,
-    #              "reason": "Refunded from shopify" if len(refunds_data) > 1 else refunds_data[0].get("note"),
-    #              "journal_id": invoices[0].journal_id.id})
-    #         move_reversal.reverse_moves()
-    #         move_reversal.new_move_ids.message_post(body=_("Credit note generated by %s as Order refunded in "
-    #                                                        "Shopify.", created_by))
-    #         move_reversal.new_move_ids.write(
-    #             {"is_refund_in_shopify": True, "shopify_refund_id": refunds_data[0].get('id')})
-    #         return [True]
-    #     return [3]
 
     def fulfilled_shopify_order(self):
         """
@@ -1630,8 +1654,8 @@ class SaleOrder(models.Model):
         skip_sms = {"skip_sms": True}
         for picking in pickings.filtered(lambda x: x.state not in ['cancel', 'done']):
             if picking.state != "assigned":
-                if picking.move_lines.move_orig_ids:
-                    completed = self.fulfilled_picking_for_shopify(picking.move_lines.move_orig_ids.picking_id)
+                if picking.move_ids.move_orig_ids:
+                    completed = self.fulfilled_picking_for_shopify(picking.move_ids.move_orig_ids.picking_id)
                     if not completed:
                         return False
                 picking.action_assign()
@@ -1694,13 +1718,6 @@ class SaleOrder(models.Model):
                       "invoice is found.\n- For order [%s], system could not find the " \
                       "related order invoice. " % order_name
             return message
-        refund_invoices = self.invoice_ids.filtered(lambda x: x.move_type == "out_refund" and x.state == "posted")
-        if refund_invoices:
-            total_refund_amount = 0.0
-            for refund_invoice in refund_invoices:
-                total_refund_amount += refund_invoice.amount_total
-            if total_refund_amount == self.amount_total:
-                return
         invoices = self.invoice_ids.filtered(lambda x: x.move_type == "out_invoice")
         for invoice in invoices:
             if not invoice.state == "posted":
@@ -1708,6 +1725,13 @@ class SaleOrder(models.Model):
                           "invoice is in 'Post' status.\n- For order [%s], system found " \
                           "related invoice but it is not in 'Post' status." % order_name
                 return message
+        refund_invoices = self.invoice_ids.filtered(lambda x: x.move_type == "out_refund" and x.state == "posted")
+        if refund_invoices:
+            total_refund_amount = 0.0
+            for refund_invoice in refund_invoices:
+                total_refund_amount += refund_invoice.amount_total
+            if total_refund_amount == self.amount_total:
+                return
         for refund_data_line in refunds_data:
             existing_refund = account_move_obj.search([("shopify_refund_id", "=", refund_data_line.get('id')),
                                                        ("shopify_instance_id", "=", self.shopify_instance_id.id)])
@@ -1717,7 +1741,8 @@ class SaleOrder(models.Model):
                 refund_data_line, invoices, created_by, shopify_financial_status)
             if refund_data_line.get('order_adjustments'):
                 self.create_refund_adjustment_line(refund_data_line.get('order_adjustments'), new_move)
-            new_move.with_context(check_move_validity=False)._recompute_dynamic_lines()
+            # new_move.with_context(check_move_validity=False)._recompute_dynamic_lines()
+            new_move.with_context(**{'check_move_validity': False})._sync_dynamic_lines({'records': new_move})
             if new_move.state == 'draft':
                 new_move.action_post()
         return message
@@ -1747,16 +1772,17 @@ class SaleOrder(models.Model):
         new_move.write({'is_refund_in_shopify': True, 'shopify_refund_id': refunds_data.get('id')})
         total_qty = 0.0
         for new_move_line in new_move.invoice_line_ids:
+            sale_line_qty = new_move_line.sale_line_ids.product_uom_qty
+            total_qty += sale_line_qty if sale_line_qty != 0.0 else 1
             shopify_line_id = new_move_line.sale_line_ids.shopify_line_id
             if new_move_line.product_id.id == self.shopify_instance_id.discount_product_id.id:
                 new_move_line.price_unit = new_move_line.price_unit / total_qty
             elif shopify_line_id and int(shopify_line_id) not in shopify_line_ids:
                 delete_move_lines += new_move_line
-                # delete_move_lines.recompute_tax_line = True
+                # delete_move_lines.compute_all_tax_dirty = True
             else:
-                total_qty += new_move_line.sale_line_ids.product_uom_qty
                 new_move_line.quantity = shopify_line_ids_with_qty.get(int(shopify_line_id))
-                new_move_line.recompute_tax_line = True
+                new_move_line.compute_all_tax_dirty = True
                 # self.set_price_based_on_refund(new_move_line)
 
         new_move.message_post(body=_("Credit note generated by %s as Order %s "
@@ -1769,9 +1795,9 @@ class SaleOrder(models.Model):
 
         if delete_move_lines:
             delete_move_lines.with_context(check_move_validity=False).write({'quantity': 0})
-            delete_move_lines.with_context(check_move_validity=False)._onchange_price_subtotal()
+            # delete_move_lines.with_context(check_move_validity=False)._onchange_price_subtotal()
             # delete_move_lines.with_context(check_move_validity=False).unlink()
-            new_move.with_context(check_move_validity=False)._recompute_tax_lines()
+            # new_move.with_context(check_move_validity=False)._recompute_tax_lines()
         return new_move
 
     def set_price_based_on_refund(self, move_line):
@@ -1783,7 +1809,7 @@ class SaleOrder(models.Model):
         total_adjust_amount = 0.0
         for line in move_line.sale_line_ids:
             if move_line.quantity != line.product_uom_qty:
-                tax_dict = json.loads(line.order_id.tax_totals_json)
+                tax_dict = line.order_id.tax_totals
                 sub_total_tax_dict = tax_dict.get('groups_by_subtotal').get('Untaxed Amount')
                 total_tax_amount = 0.0
                 if sub_total_tax_dict:
@@ -1808,7 +1834,7 @@ class SaleOrder(models.Model):
                          'move_id': move_ids.id, 'partner_id': move_ids.partner_id.id,
                          'name': adjustment_product.display_name}
             new_move_vals = account_move_line_obj.new(move_vals)
-            new_move_vals._onchange_product_id()
+            # new_move_vals._onchange_product_id()
             new_vals = account_move_line_obj._convert_to_write(
                 {name: new_move_vals[name] for name in new_move_vals._cache})
             new_vals.update({'quantity': 1, 'price_unit': -adjustments_amount, 'tax_ids': []})
@@ -1823,8 +1849,8 @@ class SaleOrder(models.Model):
         """
         inv_val = super(SaleOrder, self)._prepare_invoice()
         if self.shopify_instance_id:
-            inv_val.update({'shopify_instance_id': self.shopify_instance_id.id, 'is_shopify_multi_payment':
-                self.is_shopify_multi_payment})
+            inv_val.update({'shopify_instance_id': self.shopify_instance_id.id,
+                            'is_shopify_multi_payment': self.is_shopify_multi_payment})
         return inv_val
 
     def action_open_cancel_wizard(self):
@@ -1861,9 +1887,8 @@ class SaleOrder(models.Model):
         bom_lines = []
         for line in lines:
             shopify_line_id = line.get('id')
-            sale_order_line = self.order_line.filtered(lambda order_line: int(order_line.shopify_line_id)
-                                                                          == shopify_line_id and
-                                                                          order_line.product_id.detailed_type != 'service')
+            sale_order_line = self.order_line.filtered(lambda order_line: int(
+                order_line.shopify_line_id) == shopify_line_id and order_line.product_id.detailed_type != 'service')
             if not sale_order_line:
                 continue
             fulfilled_qty = float(line.get('quantity')) - float(line.get('fulfillable_quantity'))
@@ -1953,7 +1978,7 @@ class SaleOrder(models.Model):
             return True
         super(SaleOrder, self).paid_invoice_ept(invoices)
 
-    def create_schedule_activity_against_logbook(self, log_book_id, mismatch_record, note):
+    def create_schedule_activity_against_loglines(self, log_lines, note):
         """
         Author : Meera Sidapara 27/10/2021 this method use for create schedule activity based on
         log book.
@@ -1963,27 +1988,30 @@ class SaleOrder(models.Model):
         """
         mail_activity_obj = self.env['mail.activity']
         ir_model_obj = self.env['ir.model']
-        model_id = ir_model_obj.search([('model', '=', 'common.log.book.ept')])
-        activity_type_id = log_book_id and log_book_id.shopify_instance_id.shopify_activity_type_id.id
-        date_deadline = datetime.strftime(
-            datetime.now() + timedelta(days=int(log_book_id.shopify_instance_id.shopify_date_deadline)), "%Y-%m-%d")
-        if len(mismatch_record) > 0:
-            for user_id in log_book_id.shopify_instance_id.shopify_user_ids:
-                mail_activity = mail_activity_obj.search([('res_model_id', '=', model_id.id),
-                                                          ('user_id', '=', user_id.id),
-                                                          ('res_name', '=', log_book_id.name),
-                                                          ('activity_type_id', '=', activity_type_id)])
-                note_2 = "<p>" + note + '</p>'
-                if not mail_activity or mail_activity.note != note_2:
-                    vals = {'activity_type_id': activity_type_id, 'note': note, 'summary': log_book_id.name,
-                            'res_id': log_book_id.id, 'user_id': user_id.id or self._uid,
-                            'res_model_id': model_id.id, 'date_deadline': date_deadline}
-                    try:
-                        mail_activity_obj.create(vals)
-                    except Exception as error:
-                        _logger.info("Unable to create schedule activity, Please give proper "
-                                     "access right of this user :%s  ", user_id.name)
-                        _logger.info(error)
+        model_id = ir_model_obj.search([('model', '=', 'common.log.lines.ept')])
+        if len(log_lines) > 0:
+            for log_line in log_lines:
+                activity_type_id = log_line and log_line.shopify_instance_id.shopify_activity_type_id.id
+                date_deadline = datetime.strftime(
+                    datetime.now() + timedelta(days=int(log_line.shopify_instance_id.shopify_date_deadline)),
+                    "%Y-%m-%d")
+                for user_id in log_line.shopify_instance_id.shopify_user_ids:
+                    mail_activity = mail_activity_obj.search([('res_model_id', '=', model_id.id),
+                                                              ('user_id', '=', user_id.id),
+                                                              # ('res_name', '=', log_line.name),
+                                                              ('activity_type_id', '=', activity_type_id)])
+                    note_2 = "<p>" + note + '</p>'
+                    if not mail_activity or mail_activity.note != note_2:
+                        vals = {'activity_type_id': activity_type_id, 'note': note,
+                                # 'summary': log_line.name,
+                                'res_id': log_line.id, 'user_id': user_id.id or self._uid,
+                                'res_model_id': model_id.id, 'date_deadline': date_deadline}
+                        try:
+                            mail_activity_obj.create(vals)
+                        except Exception as error:
+                            _logger.info("Unable to create schedule activity, Please give proper "
+                                         "access right of this user :%s  ", user_id.name)
+                            _logger.info(error)
         return True
 
     def action_order_ref_redirect(self):
@@ -2006,6 +2034,8 @@ class SaleOrderLine(models.Model):
 
     shopify_line_id = fields.Char("Shopify Line", copy=False)
     is_gift_card_line = fields.Boolean(copy=False, default=False)
+    shopify_fulfillment_order_id = fields.Char("Fulfillment Order ID")
+    shopify_fulfillment_line_id = fields.Char("Fulfillment Line ID")
 
     def unlink(self):
         """

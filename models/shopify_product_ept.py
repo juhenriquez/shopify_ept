@@ -30,7 +30,7 @@ class ShopifyProductProductEpt(models.Model):
     exported_in_shopify = fields.Boolean(default=False)
     variant_id = fields.Char()
     fix_stock_type = fields.Selection([("fix", "Fix"), ("percentage", "Percentage")])
-    fix_stock_value = fields.Float(digits=0)
+    fix_stock_value = fields.Float()
     created_at = fields.Datetime()
     updated_at = fields.Datetime()
     inventory_item_id = fields.Char()
@@ -80,8 +80,7 @@ class ShopifyProductProductEpt(models.Model):
         if attrib_line_vals:
             template_vals = {"name": template_title,
                              "detailed_type": "product",
-                             "attribute_line_ids": attrib_line_vals,
-                             "invoice_policy": "order"}
+                             "attribute_line_ids": attrib_line_vals}
 
             if self.env["ir.config_parameter"].sudo().get_param("shopify_ept.set_sales_description"):
                 template_vals.update({"description_sale": result.get("body_html")})
@@ -255,12 +254,9 @@ class ShopifyProductProductEpt(models.Model):
         :param is_publish: If true it publishes the product in the Shopify store.
         @author: Nilesh Parmar @Emipro Technologies Pvt. Ltd on date 19/11/2019.
         """
-        common_log_obj = self.env["common.log.book.ept"]
         common_log_line_obj = self.env["common.log.lines.ept"]
         model = "shopify.product.product.ept"
-        model_id = common_log_line_obj.get_model_id(model)
         instance.connect_in_shopify()
-        log_book_id = common_log_obj.shopify_create_common_log_book("export", instance, model_id)
 
         for template in templates:
             new_product = shopify.Product()
@@ -272,25 +268,14 @@ class ShopifyProductProductEpt(models.Model):
 
             if not result:
                 message = "Product %s not exported in Shopify Store." % template.name
-                self.shopify_export_product_log_line(message, model_id, log_book_id)
+                common_log_line_obj.create_common_log_line_ept(shopify_instance_id=instance.id, message=message,
+                                                               model_name=model)
             if result:
                 self.update_products_details_shopify_third_layer(new_product, template, is_publish)
             if new_product and is_set_images:
                 self.export_product_images(instance, shopify_template=template)
             self._cr.commit()
 
-        if not log_book_id.log_lines:
-            log_book_id.unlink()
-        return True
-
-    def shopify_export_product_log_line(self, message, model_id, log_book_id):
-        """This method is used to create log lines of the export product process.
-        """
-        common_log_line_obj = self.env["common.log.lines.ept"]
-        vals = {"message": message,
-                "model_id": model_id,
-                "log_book_id": log_book_id.id if log_book_id else False}
-        common_log_line_obj.create(vals)
         return True
 
     def prepare_export_update_product_attribute_vals(self, template, new_product):
@@ -334,19 +319,14 @@ class ShopifyProductProductEpt(models.Model):
         :param templates: Record of shopify templates.
         @author: Nilesh Parmar @Emipro Technologies Pvt. Ltd on date 15/11/2019.
         """
-        common_log_obj = self.env["common.log.book.ept"]
-        common_log_line_obj = self.env["common.log.lines.ept"]
         model = "shopify.product.product.ept"
-        model_id = common_log_line_obj.get_model_id(model)
-
         instance.connect_in_shopify()
-        log_book_id = common_log_obj.shopify_create_common_log_book("export", instance, model_id)
 
         shopify_templates = self.check_available_products_in_shopify(instance)
         if shopify_templates:
             templates = templates.filtered(lambda template: template.id in shopify_templates.ids)
         for template in templates:
-            new_product = self.request_for_shopify_template(template, model_id, log_book_id)
+            new_product = self.request_for_shopify_template(template, model, instance)
             if not new_product:
                 continue
 
@@ -363,8 +343,6 @@ class ShopifyProductProductEpt(models.Model):
             updated_at = datetime.now()
             template.write({"updated_at": updated_at})
             template.shopify_product_ids.write({"updated_at": updated_at})
-        if not log_book_id.log_lines:
-            log_book_id.unlink()
 
         return True
 
@@ -408,7 +386,7 @@ class ShopifyProductProductEpt(models.Model):
             layer_templates.unlink()
         return shopify_templates
 
-    def request_for_shopify_template(self, template, model_id, log_book_id):
+    def request_for_shopify_template(self, template, model, instance):
         """ This method is used to request for the shopify product from Odoo to Shopify store.
             :param template: Record of shopify template.
             @return: new_product
@@ -426,7 +404,9 @@ class ShopifyProductProductEpt(models.Model):
         except Exception as error:
             message = "Template %s not found in shopify while updating Product.\nError: %s" % (
                 template.shopify_tmpl_id, str(error))
-            self.shopify_export_product_log_line(message, model_id, log_book_id)
+            self.env["common.log.lines.ept"].create_common_log_line_ept(shopify_instance_id=instance.id,
+                                                                        message=message,
+                                                                        model_name=model)
             return False
         return new_product
 
@@ -478,8 +458,8 @@ class ShopifyProductProductEpt(models.Model):
         if variant.variant_id:
             variant_vals.update({"id": variant.variant_id})
         if is_set_price:
-            price = instance.shopify_pricelist_id.get_product_price(variant.product_id, 1.0, partner=False,
-                                                                    uom_id=variant.product_id.uom_id.id)
+            price = instance.shopify_pricelist_id._get_product_price(variant.product_id, 1.0, partner=False,
+                                                                     uom_id=variant.product_id.uom_id.id)
             variant_vals.update({"price": float(price)})
         if is_set_basic_detail:
             variant_vals = self.prepare_vals_for_product_basic_details(variant_vals, variant, instance)
@@ -671,13 +651,9 @@ class ShopifyProductProductEpt(models.Model):
         here we use InventoryLevel shopify API for export stock
         @author: Maulik Barad on Date 15-Sep-2020.
         """
-        common_log_line_obj = self.env["common.log.lines.ept"]
         product_obj = self.env["product.product"]
-        sale_order_obj = self.env["sale.order"]
-
-        log_line_array = []
         model = "shopify.product.product.ept"
-        model_id = common_log_line_obj.get_model_id(model)
+        log_lines = []
         all_products = self.search_shopify_product_for_export_stock(instance, product_ids)
 
         if self._context.get('is_process_from_selected_product'):
@@ -701,7 +677,7 @@ class ShopifyProductProductEpt(models.Model):
             [("instance_id", "=", instance.id), ('legacy', '=', False)])
         if not location_ids:
             message = "Location not found for instance %s while update stock" % instance.name
-            log_line_array = self.shopify_create_log(message, model_id, False, log_line_array)
+            log_lines.append(self.shopify_create_log(instance, message, model))
 
         shopify_templates = self.check_available_products_in_shopify(instance)
         if shopify_templates:
@@ -713,7 +689,7 @@ class ShopifyProductProductEpt(models.Model):
             shopify_location_warehouse = location_id.export_stock_warehouse_ids or False
             if not shopify_location_warehouse:
                 message = "No Warehouse found for Export Stock in Shopify Location: %s" % location_id.name
-                log_line_array = self.shopify_create_log(message, model_id, False, log_line_array)
+                log_lines.append(self.shopify_create_log(instance, message, model))
                 continue
 
             odoo_product_ids = shopify_products.product_id.ids
@@ -731,7 +707,7 @@ class ShopifyProductProductEpt(models.Model):
                         message = "Inventory Item Id did not found for Shopify Product Variant ID " \
                                   "%s with name %s for instance %s while Export stock" % (
                                       shopify_product.id, shopify_product.name, instance.name)
-                        log_line_array = self.shopify_create_log(message, model_id, odoo_product, log_line_array)
+                        log_lines.append(self.shopify_create_log(instance, message, model))
                         continue
 
                     quantity = self.compute_qty_for_export_stock(product_stock, shopify_product, odoo_product)
@@ -756,7 +732,7 @@ class ShopifyProductProductEpt(models.Model):
                                                            str(error.response.code) + " " + error.response.msg,
                                                            json.loads(error.response.body.decode()).get("errors")[0]
                                                            )
-                        log_line_array = self.shopify_create_log(message, model_id, odoo_product, log_line_array)
+                        log_lines.append(self.shopify_create_log(instance, message, model))
                     except ResourceNotFound as error:
                         if hasattr(error, "response"):
                             message = "Error while Export stock for Product ID: %s & Product Name: '%s' for instance:" \
@@ -765,32 +741,30 @@ class ShopifyProductProductEpt(models.Model):
                                           str(error.response.code) + " " + error.response.msg,
                                           json.loads(error.response.body.decode()).get("errors")[0]
                                       )
-                            log_line_array = self.shopify_create_log(message, model_id, odoo_product, log_line_array)
+                            log_lines.append(self.shopify_create_log(instance, message, model))
                     except Exception as error:
                         message = "Error while Export stock for Product ID: %s & Product Name: '%s' for instance: " \
                                   "'%s'\nError: %s" % (odoo_product.id, odoo_product.name, instance.name, str(error))
-                        log_line_array = self.shopify_create_log(message, model_id, odoo_product, log_line_array)
+                        log_lines.append(self.shopify_create_log(instance, message, model))
 
                     if not self._context.get('is_process_from_selected_product'):
                         shopify_product.write({
                             'last_stock_update_date': last_export_date if not shopify_product.last_stock_update_date else datetime.now()})
-        log_book_id = False
-        if len(log_line_array) > 0:
-            log_book_id = self.create_log_book(log_line_array, "export", instance)
 
-        if log_book_id and instance.is_shopify_create_schedule:
+        if log_lines and instance.is_shopify_create_schedule:
             message = []
             count = 0
-            for log_line in log_book_id.log_lines:
+            for log_line in log_lines:
                 count += 1
                 if count <= 5:
                     message.append('<' + 'li' + '>' + log_line.message + '<' + '/' + 'li' + '>')
             if count >= 5:
                 message.append(
-                    '<' + 'p' + '>' + 'Please refer the logbook' + '  ' + log_book_id.name + '  ' + 'check it in more detail' + '<' + '/' + 'p' + '>')
+                    '<' + 'p' + '>' + 'Please refer the logbook' + '  ' + log_line.name + '  '
+                    + 'check it in more detail' + '<' + '/' + 'p' + '>')
             note = "\n".join(message)
 
-            sale_order_obj.create_schedule_activity_against_logbook(log_book_id, log_book_id.log_lines, note)
+            self.env['sale.order'].create_schedule_activity_against_loglines(log_lines, note)
         return all_products
 
     @api.model
@@ -809,9 +783,7 @@ class ShopifyProductProductEpt(models.Model):
         common_log_line_obj = self.env["common.log.lines.ept"]
         product_obj = self.env["product.product"]
         export_stock_obj = self.env['shopify.export.stock.queue.ept']
-        log_line_array = []
         model = "shopify.product.product.ept"
-        model_id = common_log_line_obj.get_model_id(model)
         all_products = self.search_shopify_product_for_export_stock(instance, product_ids)
 
         if self._context.get('is_process_from_selected_product'):
@@ -836,19 +808,20 @@ class ShopifyProductProductEpt(models.Model):
             [("instance_id", "=", instance.id), ('legacy', '=', False)])
         if not location_ids:
             message = "Location not found for instance %s while update stock" % instance.name
-            log_line_array = self.shopify_create_log(message, model_id, False, log_line_array)
+            self.shopify_create_log(instance, message, model)
 
         if not self._context.get('is_process_from_selected_product'):
             shopify_templates = self.check_available_products_in_shopify(instance)
             if shopify_templates:
                 shopify_products = shopify_templates.shopify_product_ids
 
+        shopify_products = shopify_products.filtered(lambda l: l.product_id.id in product_ids)
         export_stock_data = []
         for location_id in location_ids:
             shopify_location_warehouse = location_id.export_stock_warehouse_ids or False
             if not shopify_location_warehouse:
                 message = "No Warehouse found for Export Stock in Shopify Location: %s" % location_id.name
-                log_line_array = self.shopify_create_log(message, model_id, False, log_line_array)
+                self.shopify_create_log(instance, message, model)
                 continue
 
             odoo_product_ids = shopify_products.product_id.ids
@@ -866,7 +839,7 @@ class ShopifyProductProductEpt(models.Model):
                         message = "Inventory Item Id did not found for Shopify Product Variant ID " \
                                   "%s with name %s for instance %s while Export stock" % (
                                       shopify_product.id, shopify_product.name, instance.name)
-                        log_line_array = self.shopify_create_log(message, model_id, odoo_product, log_line_array)
+                        self.shopify_create_log(instance, message, model)
                         continue
 
                     quantity = self.compute_qty_for_export_stock(product_stock, shopify_product, odoo_product)
@@ -941,6 +914,9 @@ class ShopifyProductProductEpt(models.Model):
             elif instance.shopify_stock_field.name == "virtual_available":
                 product_stock = prod_obj.get_forecasted_qty_ept(warehouse, product_ids)
 
+            elif instance.shopify_stock_field.name == "qty_available":
+                product_stock = prod_obj.get_onhand_qty_ept(warehouse, product_ids)
+
         return product_stock
 
     def import_shopify_stock(self, instance, validate_inventory):
@@ -950,16 +926,13 @@ class ShopifyProductProductEpt(models.Model):
         Migration done by Meera Sidapara on 30/09/2021
         """
         stock_inventory_obj = self.env["stock.quant"]
-        common_log_line_obj = self.env["common.log.lines.ept"]
         stock_inventory_name_obj = self.env["stock.inventory.adjustment.name"]
         model = "shopify.product.product.ept"
-        model_id = common_log_line_obj.get_model_id(model)
-        log_line_array = []
-        inventory_records = []
+        # inventory_records = []
         templates = self.search([("shopify_instance_id", "=", instance.id), ("exported_in_shopify", "=", True)])
         if templates:
             instance.connect_in_shopify()
-            location_ids = self.search_shopify_location_for_import_stock(instance, model_id, log_line_array)
+            location_ids = self.search_shopify_location_for_import_stock(instance, model)
             if not location_ids:
                 return False
 
@@ -967,11 +940,11 @@ class ShopifyProductProductEpt(models.Model):
                 shopify_location_warehouse = location_id.import_stock_warehouse_id or False
                 if not shopify_location_warehouse:
                     message = "No Warehouse found for importing stock in Shopify Location: %s" % location_id.name
-                    log_line_array = self.shopify_create_log(message, model_id, False, log_line_array)
+                    self.shopify_create_log(instance, message, model)
                     _logger.info(message)
                     continue
 
-                inventory_levels = self.request_for_the_inventory_level(location_id, instance, model_id, log_line_array)
+                inventory_levels = self.request_for_the_inventory_level(location_id, instance, model)
 
                 if not inventory_levels:
                     continue
@@ -987,13 +960,9 @@ class ShopifyProductProductEpt(models.Model):
                     if inventories:
                         stock_inventory_name_obj.write({'name': inventory_name})
                         _logger.info("Created %s." % inventory_name)
-        if len(log_line_array) > 0:
-            self.create_log_book(log_line_array, "import", instance)
-            return []
+        # return inventory_records
 
-        return inventory_records
-
-    def search_shopify_location_for_import_stock(self, instance, model_id, log_line_array):
+    def search_shopify_location_for_import_stock(self, instance, model):
         """ This method is used to search a shopify location for import stock from shopify to Odoo.
             :param log_line_array: Blank list of for log line.
             @author: Haresh Mori @Emipro Technologies Pvt. Ltd on date 21 October 2020 .
@@ -1003,14 +972,13 @@ class ShopifyProductProductEpt(models.Model):
             [("legacy", "=", False), ("instance_id", "=", instance.id)])
         if not location_ids:
             message = "Location not found for instance %s while Importing stock" % instance.name
-            log_line_array = self.shopify_create_log(message, model_id, False, log_line_array)
-            self.create_log_book(log_line_array, "import", instance)
+            self.shopify_create_log(instance, message, model)
             _logger.info(message)
             return False
 
         return location_ids
 
-    def request_for_the_inventory_level(self, location_id, instance, model_id, log_line_array):
+    def request_for_the_inventory_level(self, location_id, instance, model):
         """ This method is used to request for inventory level from Odoo to shopify.
             @author: Haresh Mori @Emipro Technologies Pvt. Ltd on date 21 October 2020 .
             Task_id: 167537
@@ -1023,9 +991,8 @@ class ShopifyProductProductEpt(models.Model):
         except Exception as error:
             message = "Error while import stock for instance %s\nError: %s" % (
                 instance.name, str(error.response.code) + " " + error.response.msg)
-            log_line_array = self.shopify_create_log(message, model_id, False, log_line_array)
+            self.shopify_create_log(instance, message, model)
             _logger.info(message)
-            self.create_log_book(log_line_array, "import", instance)
             return False
 
         _logger.info("Length of the total inventory item id : %s", len(inventory_levels))
@@ -1092,34 +1059,16 @@ class ShopifyProductProductEpt(models.Model):
                 break
         return sum_inventory_list
 
-    def shopify_create_log(self, message=False, model_id=False, product=False, log_line_array=False):
+    def shopify_create_log(self, instance, message=False, model=False):
         """
         This method is used to prepare a vals for log line.
         @author: Angel Patel @Emipro Technologies Pvt. Ltd on date 14/11/2019.
         @Task ID: 157623
         """
-        log_line_vals = {
-            "message": message,
-            "model_id": model_id,
-            "product_id": product and product.id or False,
-            "default_code": product and product.default_code or False
-        }
-        log_line_array.append(log_line_vals)
-
-        return log_line_array
-
-    def create_log_book(self, log_line_array, log_type, instance):
-        """ This method is used to create log book id.
-            @author: Haresh Mori @Emipro Technologies Pvt. Ltd on date 21 October 2020 .
-            Task_id: 167537
-        """
-        common_log_obj = self.env["common.log.book.ept"]
-        log_book_id = common_log_obj.create({"type": log_type,
-                                             "module": "shopify_ept",
-                                             "shopify_instance_id": instance.id if instance else False,
-                                             "active": True,
-                                             "log_lines": [(0, 0, log_line) for log_line in log_line_array]})
-        return log_book_id
+        log_line = self.env["common.log.lines.ept"].create_common_log_line_ept(shopify_instance_id=instance.id,
+                                                                               message=message,
+                                                                               model_name=model)
+        return log_line
 
 
 class ShopifyTag(models.Model):

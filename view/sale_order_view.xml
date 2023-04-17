@@ -71,9 +71,10 @@
         <field name="inherit_id" ref="sale.view_order_form"/>
         <field name="arch" type="xml">
             <data>
-                <xpath expr="//page[@name='order_lines']/field[@name='order_line']/tree/field[@name='price_subtotal']"
-                       position="after">
-                    <field name="warehouse_id_ept" string="Warehouse" optional="hide"/>
+                <xpath expr="//page[@name='order_lines']/field[@name='order_line']/tree/field[@name='warehouse_id_ept']"
+                       position="attributes">
+                    <attribute name="invisible">0</attribute>
+                    <attribute name="optional">hide</attribute>
                 </xpath>
                 <notebook position="inside">
                     <page string="Shopify Info" name="shopify_ept"
@@ -82,7 +83,7 @@
                             <group>
                                 <label for="shopify_order_id"/>
                                 <div name="shopify_order_link">
-                                    <field name="shopify_order_id" readonly="True"/>
+                                    <field name="shopify_order_id" readonly="True" style="width:auto !important;"/>
                                     <button name="action_order_ref_redirect"
                                             type="object"
                                             icon="fa-external-link ">
@@ -103,7 +104,7 @@
                                 <field name="is_shopify_multi_payment" invisible="1"/>
                             </group>
                         </group>
-                        <group string="Risks">
+                        <div string="Risks">
                             <field name="risk_ids" readonly="1" nolabel="1">
                                 <tree>
                                     <field name="name"/>
@@ -131,9 +132,9 @@
                                     </group>
                                 </form>
                             </field>
-                        </group>
-                        <group string="Multi Payments" name="multi_payments"
-                               attrs="{'invisible':[('is_shopify_multi_payment','=',False)]}">
+                        </div>
+                        <div string="Multi Payments" name="multi_payments"
+                             attrs="{'invisible':[('is_shopify_multi_payment','=',False)]}">
                             <field name="shopify_payment_ids" readonly="1" nolabel="1">
                                 <tree>
                                     <field name="payment_gateway_id"/>
@@ -154,7 +155,7 @@
                                     </group>
                                 </form>
                             </field>
-                        </group>
+                        </div>
                     </page>
                 </notebook>
             </data>

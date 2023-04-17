@@ -92,8 +92,8 @@ class ShopifyCancelRefundOrderWizard(models.TransientModel):
             @author: Haresh Mori @Emipro Technologies Pvt. Ltd on date 20/11/2019.
             Task Id : 157911
         """
-        moves = order_id.invoice_ids.filtered(lambda m: m.move_type == 'out_invoice' and m.payment_state in ['paid',
-                                                                                                             'in_payment'])
+        moves = order_id.invoice_ids.filtered(
+            lambda m: m.move_type == 'out_invoice' and m.payment_state in ['paid', 'in_payment'])
         if not moves:
             # Here we add commit because we need to write values in sale order before warring
             # raise. if raise warring it will not commit so we need to write commit.
@@ -121,26 +121,22 @@ class ShopifyCancelRefundOrderWizard(models.TransientModel):
             @author: Haresh Mori @Emipro Technologies Pvt. Ltd on date 20/11/2019.
             Task Id : 157911
         """
-        common_log_book_obj = self.env["common.log.book.ept"]
         active_id = self._context.get('active_id')
         credit_note_ids = self.env['account.move'].browse(active_id)
         self.check_validation_of_multi_payment()
         model = "account.move"
-        model_id = self.env["common.log.lines.ept"].get_model_id(model)
         for credit_note_id in credit_note_ids:
             if not credit_note_id.shopify_instance_id:
                 continue
             credit_note_id.shopify_instance_id.connect_in_shopify()
             orders = credit_note_id.invoice_line_ids.sale_line_ids.order_id
             refund_lines_list, do_not_order_process_ids, mismatch_log_lines = self.prepare_refund_line_list(
-                credit_note_id, model_id)
+                credit_note_id, model)
             log_lines = self.create_refund_in_shopify(orders, credit_note_id, refund_lines_list,
-                                                      model_id, do_not_order_process_ids)
+                                                      model, do_not_order_process_ids,
+                                                      credit_note_id.shopify_instance_id)
         if mismatch_log_lines or log_lines:
             total_log_lines = mismatch_log_lines + log_lines
-            instance = credit_note_ids[0].shopify_instance_id if credit_note_ids else False
-            log_book_id = common_log_book_obj.shopify_create_common_log_book("export", instance, model_id)
-            log_book_id.write({'log_lines': [(6, 0, total_log_lines)]})
         return True
 
     def check_validation_of_multi_payment(self):
@@ -165,12 +161,13 @@ class ShopifyCancelRefundOrderWizard(models.TransientModel):
         refund_lines_list = []
         do_not_order_process_ids = []
         mismatch_log_lines = []
+        shopify_instance = credit_note_id.shopify_instance_id
         shopify_location_obj = self.env["shopify.location.ept"]
         for invoice_line_id in credit_note_id.invoice_line_ids:
             if invoice_line_id.product_id.type == 'service':
                 continue
             shopify_line_id = invoice_line_id.sale_line_ids.shopify_line_id
-            refund_line_dict = {'line_item_id': shopify_line_id,
+            refund_line_dict = {'line_item_id': int(shopify_line_id),
                                 'quantity': int(invoice_line_id.quantity),
                                 'restock_type': restock_type}
 
@@ -188,20 +185,21 @@ class ShopifyCancelRefundOrderWizard(models.TransientModel):
                     else:
                         log_message = "Location is not set in order (%s).Unable to refund in shopify.\n You can see " \
                                       "order location here: Order => Shopify Info => Shopify Location " % order_id.name
-                    log_line = self.env["common.log.lines.ept"].shopify_create_order_log_line(log_message, model_id,
-                                                                                              False, False,
-                                                                                              order_ref=order_id.name)
+                    log_line = self.env["common.log.lines.ept"].create_common_log_line_ept(
+                        shopify_instance_id=shopify_instance.id, message=log_message,
+                        model_name='sale.order',
+                        order_ref=order_id.name)
                     mismatch_log_lines.append(log_line.id)
                     do_not_order_process_ids.append(order_id.id)
                     continue
                 refund_line_dict.update(
-                    {'location_id': shopify_location_id.shopify_location_id})
+                    {'location_id': int(shopify_location_id.shopify_location_id)})
             refund_lines_list.append(refund_line_dict)
 
         return refund_lines_list, do_not_order_process_ids, mismatch_log_lines
 
-    def create_refund_in_shopify(self, orders, credit_note_id, refund_lines_list, model_id,
-                                 do_not_order_process_ids):
+    def create_refund_in_shopify(self, orders, credit_note_id, refund_lines_list, model,
+                                 do_not_order_process_ids, instance):
         """This method used to create a refund in Shopify.
             @param : self
             @return:
@@ -221,10 +219,10 @@ class ShopifyCancelRefundOrderWizard(models.TransientModel):
                 lambda picking: picking.picking_type_id.code == 'incoming' and picking.state == 'done')
             if incoming_picking_ids:
                 in_picking_total_qty = sum(
-                    incoming_picking_ids.mapped('move_lines').mapped('quantity_done'))
+                    incoming_picking_ids.mapped('move_ids').mapped('quantity_done'))
             if outgoing_picking_ids:
                 out_picking_total_qty = sum(
-                    outgoing_picking_ids.mapped('move_lines').mapped('quantity_done'))
+                    outgoing_picking_ids.mapped('move_ids').mapped('quantity_done'))
 
             if in_picking_total_qty == out_picking_total_qty:
                 shipping.update({"full_refund": True})
@@ -244,18 +242,22 @@ class ShopifyCancelRefundOrderWizard(models.TransientModel):
             except Exception as error:
                 log_message = "When creating refund in Shopify for order (%s), issue arrive in " \
                               "request (%s)" % (order.name, error)
-                log_line = self.env["common.log.lines.ept"].shopify_create_order_log_line(
-                    log_message, model_id, False, False)
+                log_line = self.env["common.log.lines.ept"].create_common_log_line_ept(
+                    shopify_instance_id=instance.id, message=log_message,
+                    model_name=model,
+                    order_ref=order.name)
                 mismatch_logline.append(log_line.id)
                 continue
             if not bool(result.id):
                 log_message = "When creating refund in Shopify for order (%s), issue arrive in " \
                               "request (%s)" % (order.name, result.errors.errors.get('base'))
-                log_line = self.env["common.log.lines.ept"].shopify_create_order_log_line(
-                    log_message, model_id, False, False)
+                log_line = self.env["common.log.lines.ept"].create_common_log_line_ept(
+                    shopify_instance_id=instance.id, message=log_message,
+                    model_name=model,
+                    order_ref=order.name)
                 mismatch_logline.append(log_line.id)
                 continue
-            credit_note_id.write({'is_refund_in_shopify': True})
+            credit_note_id.write({'is_refund_in_shopify': True, 'shopify_refund_id': result.id if result else False})
 
         return mismatch_logline
 
@@ -318,7 +320,8 @@ class ShopifyCancelRefundOrderWizard(models.TransientModel):
                 "note": note,
                 "order_id": order.shopify_order_id,
                 "refund_line_items": refund_lines_list,
-                "transactions": transactions
+                "transactions": transactions,
+                "currency": order.currency_id.name,
                 }
         return vals
 

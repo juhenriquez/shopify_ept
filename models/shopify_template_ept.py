@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import time
+from builtins import int
 from datetime import datetime
 import requests
 from dateutil import parser
@@ -156,8 +157,7 @@ class ShopifyProductTemplateEpt(models.Model):
         if sku or barcode:
             vals = {"name": product_name,
                     "detailed_type": "product",
-                    "default_code": sku,
-                    "invoice_policy": "order"}
+                    "default_code": sku}
 
             if self.env["ir.config_parameter"].sudo().get_param("shopify_ept.set_sales_description"):
                 vals.update({"description_sale": description})
@@ -171,13 +171,12 @@ class ShopifyProductTemplateEpt(models.Model):
 
         return odoo_product
 
-    def import_product_for_order(self, template_id, order_queue_line, model_id, log_book_id):
+    def import_product_for_order(self, template_id, order_queue_line, model_name, instance):
         """
         Get data of a product for creating it while it processing from order process.
         @param template_id: Shopify Template id.
         @param order_queue_line: Order Queue Line.
         @param model_id: Id of model.
-        @param log_book_id: Common Log Book.
         @author: Maulik Barad on Date 01-Sep-2020.
         """
         result = False
@@ -192,12 +191,12 @@ class ShopifyProductTemplateEpt(models.Model):
                 message = "Error while importing product for order. Product ID: %s.\nError: %s\n%s" % (
                     template_id, str(error.response.code) + " " + error.response.msg,
                     json.loads(error.response.body.decode()).get("errors")[0])
-                self.create_log_line_for_queue_line(message, model_id, log_book_id, False, order_queue_line, "")
+                self.create_log_line_for_queue_line(instance, message, model_name, False, order_queue_line, "")
         except Exception as error:
             if order_queue_line:
                 message = "Shopify product did not exist in Shopify store with product id: %s \nError : %s" % (
                     template_id, str(error))
-                self.create_log_line_for_queue_line(message, model_id, log_book_id, False, order_queue_line, "")
+                self.create_log_line_for_queue_line(instance, message, model_name, False, order_queue_line, "")
 
         return result
 
@@ -224,7 +223,7 @@ class ShopifyProductTemplateEpt(models.Model):
 
         return variant_vals
 
-    def create_log_line_for_queue_line(self, message, model_id, log_book_id, product_data_line_id, order_data_line_id,
+    def create_log_line_for_queue_line(self, instance, message, model_name, product_data_line_id, order_data_line_id,
                                        product_sku, create_activity=False):
         """
         Creates log line as per queue line provided.
@@ -235,14 +234,16 @@ class ShopifyProductTemplateEpt(models.Model):
         from_sale = False
 
         if product_data_line_id:
-            common_log_line_obj.shopify_create_product_log_line(message, model_id,
-                                                                product_data_line_id,
-                                                                log_book_id, product_sku)
+            common_log_line_obj.create_common_log_line_ept(shopify_instance_id=instance.id,
+                                                           message=message,
+                                                           model_name=model_name,
+                                                           shopify_product_data_queue_line_id=product_data_line_id.id)
             product_data_line_id.write({"state": "failed", "last_process_date": datetime.now()})
         elif order_data_line_id:
-            common_log_line_obj.shopify_create_order_log_line(message, model_id,
-                                                              order_data_line_id,
-                                                              log_book_id)
+            common_log_line_obj.create_common_log_line_ept(shopify_instance_id=instance.id,
+                                                           message=message,
+                                                           model_name=model_name,
+                                                           shopify_order_data_queue_line_id=order_data_line_id.id)
             order_data_line_id.write({"state": "failed", "processed_at": datetime.now()})
             from_sale = True
 
@@ -266,14 +267,15 @@ class ShopifyProductTemplateEpt(models.Model):
         product_category = product_category_obj.search([("name", "=", product_type),
                                                         ("is_shopify_product_cat", "=", True)],
                                                        limit=1)
-
         if not product_category:
-            product_category = product_category_obj.create({"name": product_type,
-                                                            "is_shopify_product_cat": True})
+            product_category = product_category_obj.search([("name", "=", product_type)], limit=1)
+            if not product_category:
+                product_category = product_category_obj.create({"name": product_type,
+                                                                "is_shopify_product_cat": True})
 
         return product_category
 
-    def shopify_sync_products(self, product_data_line_id, shopify_tmpl_id, instance, log_book_id,
+    def shopify_sync_products(self, product_data_line_id, shopify_tmpl_id, instance,
                               order_data_line_id=False):
         """
         This method is used to sync products from queue line or shopify template id for Order.
@@ -281,18 +283,15 @@ class ShopifyProductTemplateEpt(models.Model):
         @param shopify_tmpl_id: Id of shopify template, to import particular product, when not found while processing
         the order.
         @param instance: Shopify Instance.
-        @param log_book_id: Common Log Book.
         @param order_data_line_id: Order Queue Line, when needed to import a product for a order.
         @author: Maulik Barad on Date 01-Sep-2020.
         """
-        common_log_line_obj = self.env["common.log.lines.ept"]
-
-        model_id = common_log_line_obj.get_model_id("shopify.product.template.ept")
+        model_name = "shopify.product.template.ept"
         instance.connect_in_shopify()
 
         template_data, skip_existing_product = self.convert_shopify_template_response(shopify_tmpl_id,
-                                                                                      product_data_line_id, model_id,
-                                                                                      log_book_id, order_data_line_id)
+                                                                                      product_data_line_id, model_name,
+                                                                                      order_data_line_id, instance)
 
         if not template_data:
             return True
@@ -308,26 +307,39 @@ class ShopifyProductTemplateEpt(models.Model):
         if shopify_template:
             shopify_template = self.sync_product_with_existing_template(shopify_template, skip_existing_product,
                                                                         template_data, instance,
-                                                                        product_category, model_id, log_book_id,
+                                                                        product_category, model_name,
                                                                         product_data_line_id,
                                                                         order_data_line_id)
-            if not skip_existing_product and instance.sync_product_with_images and shopify_template and shopify_template.shopify_tmpl_id:
+            if not skip_existing_product and instance.sync_product_with_images and shopify_template and \
+                    shopify_template.shopify_tmpl_id:
                 shopify_template.shopify_sync_product_images(template_data)
         else:
-            shopify_template = self.sync_new_product(template_data, instance, product_category, model_id, log_book_id,
+            shopify_template = self.sync_new_product(template_data, instance, product_category, model_name,
                                                      product_data_line_id, order_data_line_id)
             if shopify_template and instance.sync_product_with_images and shopify_template.shopify_tmpl_id:
                 shopify_template.shopify_sync_product_images(template_data)
 
         if shopify_template and product_data_line_id:
-            product_data_line_id.write({"state": "done", "last_process_date": datetime.now()})
+            product_data_line_id.write(
+                {"state": "done", "last_process_date": datetime.now()})
+        if shopify_template:
+            self.update_weight_product_variants(instance, shopify_template, template_data.get("variants"))
 
         _logger.info("Process completed of Product- %s || %s.", template_data.get("id"), template_data.get("title"))
 
         return shopify_template
 
-    def convert_shopify_template_response(self, shopify_tmpl_id, product_data_line_id, model_id, log_book_id,
-                                          order_data_line_id):
+    def update_weight_product_variants(self, instance, shopify_template, variant_data):
+        for variant in variant_data:
+            company_uom = instance._default_UOM_category()
+            weight = instance.shopify_product_uom_id._compute_quantity(variant.get("weight"),
+                                                     company_uom)
+            product_varinat = shopify_template.product_tmpl_id.product_variant_ids.filtered(
+                lambda x: x.default_code == variant.get('sku'))
+            product_varinat.write({'weight': weight})
+
+    def convert_shopify_template_response(self, shopify_tmpl_id, product_data_line_id, model_name,
+                                          order_data_line_id, instance):
         """ This method is used to convert product response in proper formate.
             @return:template_data, skip_existing_product
             @author: Haresh Mori @Emipro Technologies Pvt. Ltd on date 22 October 2020 .
@@ -335,8 +347,7 @@ class ShopifyProductTemplateEpt(models.Model):
         """
         skip_existing_product = False
         if shopify_tmpl_id and not product_data_line_id:
-            result = self.import_product_for_order(shopify_tmpl_id, order_data_line_id, model_id,
-                                                   log_book_id)
+            result = self.import_product_for_order(shopify_tmpl_id, order_data_line_id, model_name, instance)
             if not result:
                 return False
 
@@ -350,7 +361,7 @@ class ShopifyProductTemplateEpt(models.Model):
         return template_data, skip_existing_product
 
     def sync_product_with_existing_template(self, shopify_template, skip_existing_product, template_data, instance,
-                                            product_category, model_id, log_book_id, product_data_line_id,
+                                            product_category, model_name, product_data_line_id,
                                             order_data_line_id):
         """
         This method is used for importing existing template.
@@ -369,7 +380,7 @@ class ShopifyProductTemplateEpt(models.Model):
                                                                                      template_vals,
                                                                                      product_data_line_id,
                                                                                      order_data_line_id,
-                                                                                     model_id, log_book_id)
+                                                                                     model_name)
         if need_to_archive:
             products_to_archive = shopify_template.shopify_product_ids.filtered(
                 lambda x: int(x.variant_id) not in variant_ids)
@@ -377,8 +388,7 @@ class ShopifyProductTemplateEpt(models.Model):
         return shopify_template if len(variant_ids) == len(variant_data) else False
 
     def sync_variant_data_with_existing_template(self, instance, variant_data, template_data, shopify_template,
-                                                 template_vals, product_data_line_id, order_data_line_id, model_id,
-                                                 log_book_id):
+                                                 template_vals, product_data_line_id, order_data_line_id, model_name):
         """ This method is used to sync Shopify variant data in which the Shopify template is existing in Odoo.
             @return: variant_ids, need_to_archive
             @author: Haresh Mori @Emipro Technologies Pvt. Ltd on date 22 October 2020 .
@@ -397,7 +407,7 @@ class ShopifyProductTemplateEpt(models.Model):
 
             message = self.check_sku_barcode(sku, barcode, name, variant_id, instance.shopify_sync_product_with)
             if message:
-                self.create_log_line_for_queue_line(message, model_id, log_book_id, product_data_line_id,
+                self.create_log_line_for_queue_line(instance, message, model_name, product_data_line_id,
                                                     order_data_line_id, sku)
                 continue
             # Here we are not passing SKU and Barcode while searching shopify product, Because We
@@ -422,7 +432,7 @@ class ShopifyProductTemplateEpt(models.Model):
 
                 message = self.is_product_importable(template_data, instance, odoo_product, shopify_product)
                 if message:
-                    self.create_log_line_for_queue_line(message, model_id, log_book_id, product_data_line_id,
+                    self.create_log_line_for_queue_line(instance, message, model_name, product_data_line_id,
                                                         order_data_line_id, sku, create_activity=True)
                     break
 
@@ -447,7 +457,7 @@ class ShopifyProductTemplateEpt(models.Model):
 
                     if isinstance(shopify_product, str):
                         message = shopify_product
-                        self.create_log_line_for_queue_line(message, model_id, log_book_id, product_data_line_id,
+                        self.create_log_line_for_queue_line(instance, message, model_name, product_data_line_id,
                                                             order_data_line_id, sku, create_activity=True)
                         variant_ids = []
                         break
@@ -459,7 +469,7 @@ class ShopifyProductTemplateEpt(models.Model):
                     else:
                         message = "Product %s not found for SKU %s and Barcode %s in Odoo." % (name, sku, barcode)
 
-                    self.create_log_line_for_queue_line(message, model_id, log_book_id, product_data_line_id,
+                    self.create_log_line_for_queue_line(instance, message, model_name, product_data_line_id,
                                                         order_data_line_id, sku)
                     continue
             else:
@@ -469,7 +479,7 @@ class ShopifyProductTemplateEpt(models.Model):
 
         return variant_ids, need_to_archive
 
-    def sync_new_product(self, template_data, instance, product_category, model_id, log_book_id, product_data_line_id,
+    def sync_new_product(self, template_data, instance, product_category, model_name, product_data_line_id,
                          order_data_line_id):
         """
         This method is used for importing new products from Shopify to Odoo.
@@ -498,7 +508,7 @@ class ShopifyProductTemplateEpt(models.Model):
 
             message = self.check_sku_barcode(sku, barcode, name, variant_id, instance.shopify_sync_product_with)
             if message:
-                self.create_log_line_for_queue_line(message, model_id, log_book_id, product_data_line_id,
+                self.create_log_line_for_queue_line(instance, message, model_name, product_data_line_id,
                                                     order_data_line_id, sku)
                 continue
 
@@ -508,7 +518,7 @@ class ShopifyProductTemplateEpt(models.Model):
 
             message = self.is_product_importable(template_data, instance, odoo_product, shopify_product)
             if message:
-                self.create_log_line_for_queue_line(message, model_id, log_book_id, product_data_line_id,
+                self.create_log_line_for_queue_line(instance, message, model_name, product_data_line_id,
                                                     order_data_line_id, sku, create_activity=True)
                 break
 
@@ -552,7 +562,7 @@ class ShopifyProductTemplateEpt(models.Model):
                     need_to_update_template = False
                 if isinstance(shopify_product, str):
                     message = shopify_product
-                    self.create_log_line_for_queue_line(message, model_id, log_book_id, product_data_line_id,
+                    self.create_log_line_for_queue_line(instance, message, model_name, product_data_line_id,
                                                         order_data_line_id, sku, create_activity=True)
                     continue
             else:
@@ -563,7 +573,7 @@ class ShopifyProductTemplateEpt(models.Model):
                 else:
                     message = "Product %s not found for SKU %s and Barcode %s in Odoo." % (name, sku, barcode)
 
-                self.create_log_line_for_queue_line(message, model_id, log_book_id, product_data_line_id,
+                self.create_log_line_for_queue_line(instance, message, model_name, product_data_line_id,
                                                     order_data_line_id, sku)
                 continue
 
@@ -706,7 +716,8 @@ class ShopifyProductTemplateEpt(models.Model):
                 odoo_product.default_code = shopify_product.default_code
 
         elif shopify_product:
-            if not shopify_product.shopify_template_id.exported_in_shopify and not shopify_product.shopify_template_id.shopify_tmpl_id and shopify_template:
+            if not shopify_product.shopify_template_id.exported_in_shopify and not \
+                    shopify_product.shopify_template_id.shopify_tmpl_id and shopify_template:
                 variant_vals.update({'shopify_template_id': shopify_template.id})
                 shopify_product.shopify_template_id.write({'active': False})
             shopify_product.write(variant_vals)
@@ -734,7 +745,11 @@ class ShopifyProductTemplateEpt(models.Model):
         shopify_product_image_obj = shopify_product_images = self.env["shopify.product.image.ept"]
         existing_common_template_images = {}
         is_template_image_set = bool(self.product_tmpl_id.image_1920)
+        i = 0
         for odoo_image in self.product_tmpl_id.ept_image_ids:
+            i += 1
+            if i % 500 == 0: self.env.cache.invalidate()
+            odoo_image.read(['image'])
             if not odoo_image.image:
                 continue
             key = hashlib.md5(odoo_image.image).hexdigest()
@@ -790,8 +805,7 @@ class ShopifyProductTemplateEpt(models.Model):
                             common_product_image = self.product_tmpl_id.ept_image_ids.filtered(
                                 lambda x: x.image == self.product_tmpl_id.image_1920)
                         else:
-                            if key not in existing_common_template_images.keys():
-                                common_product_image = self.create_common_product_image(image, url, False)
+                            common_product_image = self.create_common_product_image(image, url, False)
                         shopify_product_image = self.search_shopify_product_images(self.id, False, False,
                                                                                    common_product_image.id)
                         if shopify_product_image:
@@ -893,8 +907,7 @@ class ShopifyProductTemplateEpt(models.Model):
                                     lambda x: x.image == shopify_product.product_id.image_1920)
 
                             else:
-                                if key not in existing_common_variant_images.keys():
-                                    common_product_image = self.create_common_product_image(image, url, shopify_product)
+                                common_product_image = self.create_common_product_image(image, url, shopify_product)
 
                             shopify_product_image = self.search_shopify_product_images(self.id, shopify_product.id,
                                                                                        False, common_product_image.id)
@@ -1134,9 +1147,7 @@ class ShopifyProductTemplateEpt(models.Model):
         This method is used to publish/unpublish product in shopify store from the the shopify product form view in
         odoo.
         """
-        common_log_book_obj = self.env["common.log.book.ept"]
         common_log_line_obj = self.env["common.log.lines.ept"]
-        model_id = common_log_line_obj.get_model_id("shopify.product.template.ept")
         published_at = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
         instance = self.shopify_instance_id
         instance.connect_in_shopify()
@@ -1174,10 +1185,21 @@ class ShopifyProductTemplateEpt(models.Model):
                             self.write({"updated_at": updated_at, "published_at": published_at,
                                         "website_published": website_published})
             except:
-                log_book_id = common_log_book_obj.shopify_create_common_log_book("export", instance, model_id)
                 message = "Template %s not found in shopify When Publish" % self.shopify_tmpl_id
-                vals = {"message": message, "model_id": model_id,
-                        # "res_id": self.shopify_tmpl_id if self.shopify_tmpl_id else False,
-                        "log_book_id": log_book_id.id if log_book_id else False,
-                        }
-                common_log_line_obj.create(vals)
+                common_log_line_obj.create_common_log_line_ept(shopify_instance_id=instance.id,
+                                                               message=message,
+                                                               model_name="shopify.product.template.ept")
+
+    def action_product_ref_redirect(self):
+        """
+        This method is used to redirect Shopify product in shopify Store.
+        @author: Yagnik Joshi on Date 11-January-2023.
+        @Task: 190111 - Shopify APP features
+        """
+        self.ensure_one()
+        url = '%s/admin/products/%s' % (self.shopify_instance_id.shopify_host, self.shopify_tmpl_id)
+        return {
+            'type': 'ir.actions.act_url',
+            'url': url,
+            'target': 'new',
+        }

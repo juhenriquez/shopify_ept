@@ -25,8 +25,7 @@ class ShopifyPaymentReportEpt(models.Model):
     payout_date = fields.Date(help="The date the payout was issued.")
     payout_transaction_ids = fields.One2many('shopify.payout.report.line.ept', 'payout_id',
                                              string="Payout transaction lines")
-    common_log_book_id = fields.Many2one("common.log.book.ept", "Log Book")
-    common_log_line_ids = fields.One2many(related="common_log_book_id.log_lines", string="Log Lines")
+    common_log_line_ids = fields.One2many("common.log.lines.ept",'shopify_payout_report_line_id', string="Log Lines")
     currency_id = fields.Many2one('res.currency', string='Currency',
                                   help="currency code of the payout.")
     amount = fields.Float(string="Total Amount", help="The total amount of the payout.")
@@ -54,7 +53,6 @@ class ShopifyPaymentReportEpt(models.Model):
         @param instance: Browsable shopify instance.
         @author: Maulik Barad on Date 27-Nov-2020.
         """
-        log_book_obj = self.env['common.log.book.ept']
         log_line_obj = self.env['common.log.lines.ept']
 
         instance.connect_in_shopify()
@@ -63,14 +61,9 @@ class ShopifyPaymentReportEpt(models.Model):
             payout_reports = shopify.Payouts().find(status="paid", date_min=start_date, date_max=end_date, limit=250)
         except Exception as error:
             message = "Something is wrong while import the payout records : {0}".format(error)
-            model_id = self.env["common.log.lines.ept"].get_model_id(self._name)
-            log_book_id = log_book_obj.create({'type': 'import', 'module': 'shopify_ept',
-                                               'shopify_instance_id': instance.id,
-                                               'model_id': model_id,
-                                               'create_date': datetime.now(),
-                                               'active': True})
-            log_line_obj.create({'log_book_id': log_book_id.id, 'message': message,
-                                 'model_id': model_id or False})
+            log_line_obj.create_common_log_line_ept(shopify_instance_id=instance.id,
+                                                    message=message,
+                                                    model_name=self._name)
             _logger.info(message)
             return False
 
@@ -79,8 +72,8 @@ class ShopifyPaymentReportEpt(models.Model):
 
         self._cr.commit()
         _logger.info("Payout Reports are Created. Generating Bank statements...")
-        for payout in payouts:
-            payout.generate_bank_statement()
+        # for payout in payouts:
+        #     payout.generate_bank_statement()
 
         instance.write({'payout_last_import_date': end_date})
         _logger.info("Payout Reports are Imported.")
@@ -223,12 +216,8 @@ class ShopifyPaymentReportEpt(models.Model):
         This function is used to show generated bank statement from process of settlement report
         """
         self.ensure_one()
-        action = self.env.ref('account.action_bank_statement_tree', False)
-        form_view = self.env.ref('account.view_bank_statement_form', False)
-        result = action and action.read()[0] or {}
-        result['views'] = [(form_view and form_view.id or False, 'form')]
-        result['res_id'] = self.statement_id and self.statement_id.id or False
-        return result
+        res = self.statement_id.action_open_bank_reconcile_widget()
+        return res
 
     def prepare_payout_vals(self, data, instance):
         """
@@ -323,7 +312,7 @@ class ShopifyPaymentReportEpt(models.Model):
         """
         partner_obj = self.env['res.partner']
         bank_statement_line_obj = self.env['account.bank.statement.line']
-        log_lines = common_log_line_obj = self.env['common.log.lines.ept']
+        log_lines = []
         account_payment_obj = self.env['account.payment']
         sale_order_obj = self.env["sale.order"]
 
@@ -343,8 +332,8 @@ class ShopifyPaymentReportEpt(models.Model):
                     message = "Transaction line {0} will not automatically reconcile due to " \
                               "order {1} is not found in odoo.".format(
                         transaction.transaction_id, transaction.source_order_id)
-                    log_lines += common_log_line_obj.create({'message': message,
-                                                             'shopify_payout_report_line_id': transaction.id})
+                    log_lines.append({'message': message,
+                                      'shopify_payout_report_line_id': transaction.id})
                     # We can not use shopify order reference here because it may create duplicate name,
                     # and name of journal entry should be unique per company. So here I have used transaction Id
                     bank_line_vals = {
@@ -355,31 +344,33 @@ class ShopifyPaymentReportEpt(models.Model):
                         'statement_id': bank_statement_id.id,
                         'shopify_transaction_id': transaction.transaction_id,
                         "shopify_transaction_type": transaction.transaction_type,
-                        'sequence': 1000
+                        'sequence': 1000,
+                        'journal_id' : self.instance_id.shopify_settlement_report_journal_id.id
                     }
                     bank_statement_line_obj.create(bank_line_vals)
                     transaction.is_remaining_statement = False
                     continue
 
             partner = partner_obj._find_accounting_partner(order_id.partner_id)
-            domain, invoice, log_line = self.check_for_invoice_refund(transaction)
+            domain, invoice, log_line = self.check_for_invoice_refund(transaction, log_lines)
 
             if domain:
                 payment_reference = account_payment_obj.search(domain, limit=1)
 
                 if payment_reference:
                     reference = payment_reference.name
-                    if not regenerate:
-                        payment_aml_rec = payment_reference.line_ids.filtered(
-                            lambda line: line.account_internal_type == "liquidity")
-                        reconciled, log_line = self.check_reconciled_transactions(transaction, payment_aml_rec)
-                        if reconciled:
-                            log_lines += log_line
-                            continue
+                    # if not regenerate:
+                    #     payment_aml_rec = payment_reference.line_ids.filtered(
+                    #         lambda line: line.account_internal_type == "liquidity")
+                    #     reconciled, log_line = self.check_reconciled_transactions(transaction, log_lines,
+                    #                                                               payment_aml_rec)
+                    #     if reconciled:
+                    #         # log_lines += log_line
+                    #         continue
                 else:
                     reference = invoice.name or ''
             else:
-                log_lines += log_line
+                # log_lines += log_line
                 reference = transaction.order_id.name
 
             if transaction.amount:
@@ -393,6 +384,9 @@ class ShopifyPaymentReportEpt(models.Model):
                 else:
                     if order_id.name:
                         name = transaction.transaction_type + "_" + order_id.name + "/" + transaction.transaction_id
+                counter_part_account_id = self.instance_id.transaction_line_ids.filtered(lambda l :l.transaction_type
+                                                                                                   ==
+                                                                                                   transaction.transaction_type).account_id
                 bank_line_vals = {
                     'name': name or reference,
                     'payment_ref': reference,
@@ -403,7 +397,10 @@ class ShopifyPaymentReportEpt(models.Model):
                     'sale_order_id': order_id.id,
                     'shopify_transaction_id': transaction.transaction_id,
                     "shopify_transaction_type": transaction.transaction_type,
-                    'sequence': 1000
+                    'sequence': 1000,
+                    'journal_id' :  self.instance_id.shopify_settlement_report_journal_id.id,
+                    'counterpart_account_id' : counter_part_account_id.id
+
                 }
                 if invoice and invoice.move_type == "out_refund":
                     bank_line_vals.update({"refund_invoice_id": invoice.id})
@@ -412,7 +409,7 @@ class ShopifyPaymentReportEpt(models.Model):
                     transaction.is_remaining_statement = False
 
         if log_lines:
-            self.set_payout_log_book(log_lines)
+            self.set_payout_log_line(log_lines)
 
             note = "Bank statement lines are generated but will not reconcile automatically for Transaction IDs : "
             for log_line in self.common_log_line_ids:
@@ -420,10 +417,10 @@ class ShopifyPaymentReportEpt(models.Model):
             self.message_post(body=note)
 
             if self.instance_id.is_shopify_create_schedule:
-                self.common_log_line_ids.create_payout_schedule_activity(note, self.id)
+                self.common_log_line_ids.create_payout_schedule_activity(note, self)
         return True
 
-    def check_for_invoice_refund(self, transaction):
+    def check_for_invoice_refund(self, transaction, log_lines):
         """
         This method is used to search for invoice or refund and then prepare domain as that..
         @param transaction: record of the transaction line.
@@ -431,7 +428,6 @@ class ShopifyPaymentReportEpt(models.Model):
         """
         invoice_ids = self.env["account.move"]
         domain = []
-        log_line = common_log_line_obj = self.env['common.log.lines.ept']
         order_id = transaction.order_id
 
         if transaction.transaction_type == 'charge':
@@ -441,9 +437,9 @@ class ShopifyPaymentReportEpt(models.Model):
             if not invoice_ids:
                 message = "Invoice amount is not matched for order %s in odoo" % \
                           (order_id.name or transaction.source_order_id)
-                log_line = common_log_line_obj.create({'message': message,
-                                                       'shopify_payout_report_line_id': transaction.id})
-                return domain, invoice_ids, log_line
+                log_lines.append({'message': message,
+                                  'shopify_payout_report_line_id': transaction.id})
+                return domain, invoice_ids, log_lines
             domain += [('amount', '=', transaction.amount), ('payment_type', '=', 'inbound')]
         elif transaction.transaction_type in ['refund', 'payment_refund']:
             invoice_ids = order_id.invoice_ids.filtered(lambda x:
@@ -452,13 +448,13 @@ class ShopifyPaymentReportEpt(models.Model):
             if not invoice_ids:
                 message = "In Shopify Payout, there is a Refund, but Refund amount is not matched for order %s in" \
                           "odoo" % (order_id.name or transaction.source_order_id)
-                log_line = common_log_line_obj.create({'message': message,
-                                                       'shopify_payout_report_line_id': transaction.id})
-                return domain, invoice_ids, log_line
+                log_lines.append({'message': message,
+                                  'shopify_payout_report_line_id': transaction.id})
+                return domain, invoice_ids, log_lines
             domain += [('amount', '=', -transaction.amount), ('payment_type', '=', 'outbound')]
 
         domain.append(('ref', 'in', invoice_ids.mapped("payment_reference")))
-        return domain, invoice_ids, log_line
+        return domain, invoice_ids, log_lines
 
     def check_journal_and_currency(self):
         """
@@ -482,20 +478,19 @@ class ShopifyPaymentReportEpt(models.Model):
             raise UserError(_(message_body))
         return journal
 
-    def check_reconciled_transactions(self, transaction, aml_rec=False):
+    def check_reconciled_transactions(self, transaction, log_lines, aml_rec=False):
         """
         This method is used to check if the transaction line already reconciled or not.
         @param transaction: Record of the transaction.
         @param aml_rec: Record of move line.
         """
-        log_line = common_log_line_obj = self.env['common.log.lines.ept']
         reconciled = False
         if aml_rec and aml_rec.statement_id:
             message = 'Transaction line %s is already reconciled.' % transaction.transaction_id
-            log_line = common_log_line_obj.create({'message': message,
-                                                   'shopify_payout_report_line_id': transaction.id})
+            log_lines.append({'message': message,
+                              'shopify_payout_report_line_id': transaction.id})
             reconciled = True
-        return reconciled, log_line
+        return reconciled, log_lines
 
     def generate_remaining_bank_statement(self):
         """
@@ -543,24 +538,28 @@ class ShopifyPaymentReportEpt(models.Model):
         @param statement_line: Record of bank statement line.
         @author: Maulik Barad on Date 07-Dec-2020.
         """
+        log_line = []
         shopify_payout_report_line_obj = self.env['shopify.payout.report.line.ept']
         sale_order_obj = self.env['sale.order']
         shopify_payout_report_line_id = shopify_payout_report_line_obj.search(
-            [('transaction_id', '=', statement_line.payment_ref)])
-        sale_order_id = sale_order_obj.search(
-            ['|', ('shopify_order_id', '=', shopify_payout_report_line_id.source_order_id),
-             ('name', '=', statement_line.payment_ref), ('shopify_instance_id', '=', self.instance_id.id)], limit=1)
-        if sale_order_id:
+            [('transaction_id', '=', statement_line.shopify_transaction_id)])
+        if not shopify_payout_report_line_id.order_id:
+            sale_order_id = sale_order_obj.search(
+                ['|', ('shopify_order_id', '=', shopify_payout_report_line_id.source_order_id),
+                 ('name', '=', statement_line.payment_ref), ('shopify_instance_id', '=', self.instance_id.id)], limit=1)
             shopify_payout_report_line_id.write({'order_id': sale_order_id.id})
             statement_line.write({'sale_order_id': sale_order_id.id})
-            domain, invoice, log_line = self.check_for_invoice_refund(shopify_payout_report_line_id)
+        sale_order_id = shopify_payout_report_line_id.order_id
+        if sale_order_id:
+            domain, invoice, log_line = self.check_for_invoice_refund(shopify_payout_report_line_id,log_line)
             if invoice and invoice.move_type == "out_refund":
                 statement_line.update({"refund_invoice_id": invoice.id})
         order = statement_line.sale_order_id
         if order and not shopify_payout_report_line_id:
             shopify_payout_report_line_id = shopify_payout_report_line_obj.search(
                 [('transaction_id', '=', statement_line.shopify_transaction_id)])
-        if shopify_payout_report_line_id and shopify_payout_report_line_id.transaction_type == 'refund' and not statement_line.refund_invoice_id:
+        if shopify_payout_report_line_id and shopify_payout_report_line_id.transaction_type == 'refund' \
+                and not statement_line.refund_invoice_id:
             invoices = self.env['account.move'].search(
                 [('shopify_instance_id', '=', self.instance_id.id), ('invoice_origin', '=', order.name),
                  ('move_type', '=', 'out_refund'), ('amount_total', '=', abs(statement_line.amount))])
@@ -613,7 +612,7 @@ class ShopifyPaymentReportEpt(models.Model):
         move_line_total_amount = 0.0
         currency_ids = []
         move_lines = unpaid_invoices.line_ids.filtered(
-            lambda l: l.account_id.user_type_id.type == 'receivable' and not l.reconciled)
+            lambda l:  l.account_id.account_type == 'asset_receivable' and not l.reconciled)
         for moveline in move_lines:
             amount = moveline.debit - moveline.credit
             amount_currency = 0.0
@@ -635,10 +634,7 @@ class ShopifyPaymentReportEpt(models.Model):
         return move_line_total_amount, currency_ids, move_line_data
 
     def reconcile_invoice_refund(self, statement_line, move_line_total_amount, currency_ids, move_line_data,
-                                 paid_move_lines):
-        """"""
-        log_line = common_log_line_obj = self.env['common.log.lines.ept']
-
+                                 paid_move_lines, log_lines):
         if round(statement_line.amount, 10) == round(move_line_total_amount, 10) and (
                 not statement_line.currency_id or statement_line.currency_id.id ==
                 self.statement_id.currency_id.id):
@@ -652,9 +648,11 @@ class ShopifyPaymentReportEpt(models.Model):
                         statement_line.write(vals)
             try:
                 if move_line_data:
-                    statement_line.reconcile(lines_vals_list=move_line_data)
+                    data = move_line_data[0]
+                    move_line_id = data.get('id', False)
+                    self.shopify_reconcile_bank_statement_line_ept(statement_line, move_line_id)
                 for payment_line in paid_move_lines:
-                    statement_line.reconcile(([{'id': payment_line.id}]))
+                    self.shopify_reconcile_bank_statement_line_ept(statement_line, payment_line.id)
             except Exception as error:
                 message = "Error occurred while reconciling statement line : " + statement_line.payment_ref + \
                           ".\n" + str(error)
@@ -662,14 +660,23 @@ class ShopifyPaymentReportEpt(models.Model):
                     lambda x: x.transaction_type == statement_line.shopify_transaction_type and
                               x.transaction_id == statement_line.shopify_transaction_id and x.amount ==
                               statement_line.amount)
-                log_line = common_log_line_obj.create({"message": message,
-                                                       "shopify_payout_report_line_id": transaction_line.id})
+                log_lines.append({"message": message,
+                                  "shopify_payout_report_line_id": transaction_line.id})
                 statement_line.button_undo_reconciliation()
-        return log_line
+        return log_lines
 
-    def reconcile_other_transactions(self, statement_line, move_line_data):
-        """"""
-        log_line = common_log_line_obj = self.env['common.log.lines.ept']
+    def shopify_reconcile_bank_statement_line_ept(self, statement_line_id, move_line_id):
+        """
+        This method will help to reconcile amazon bank statement line.
+        :param statement_line_id: int
+        :param move_line_id: int
+        :return:
+        """
+        wizard = self.env['bank.rec.widget'].with_context(default_st_line_id=statement_line_id).new({})
+        wizard._action_add_new_amls(self.env['account.move.line'].browse(move_line_id))
+        wizard.with_context(dynamic_unlink=True).button_validate(async_action=False)
+
+    def reconcile_other_transactions(self, statement_line, move_line_data, log_lines):
 
         transaction_type = statement_line.shopify_transaction_type
         transaction_account_line = self.instance_id.transaction_line_ids.filtered(
@@ -680,37 +687,50 @@ class ShopifyPaymentReportEpt(models.Model):
                       "to Configuration > Instances > Open Instance and set account in Payout Configuration " \
                       "Tab." % (statement_line.payment_ref, transaction_type)
             if self._context.get("cron_process"):
-                log_line = common_log_line_obj.create({"message": message})
-                return log_line
+                log_lines.append({"message": message})
+                return log_lines
             raise UserError(_(message))
+        # move_line_id = statement_line.move_id.line_ids.filtered(lambda x: x.credit == 0.0)
+        # move_line_id = move_line_id[0]
+        # move_line_id.with_context(skip_account_move_synchronization=True).write({
+        #     'account_id': transaction_account_line.account_id.id})
         move_line_data.append({
+            "id": statement_line.move_id.id,
             "name": statement_line.payment_ref,
             "balance": -statement_line.amount,
-            "account_id": transaction_account_line.account_id.id
+            "account_id": transaction_account_line[0].account_id.id
         })
-        statement_line.reconcile(lines_vals_list=move_line_data)
-        return log_line
+        if move_line_data:
+            data = move_line_data[0]
+            move_line_id = data.get('id', False)
+            self.shopify_reconcile_bank_statement_line_ept(statement_line.id, move_line_id)
+        # ending_balance_line.move_id.action_post()
+        # move_line_data.append({
+        #     "name": statement_line.payment_ref,
+        #     "balance": -statement_line.amount,
+        #     "account_id": transaction_account_line.account_id.id
+        # })
+        # statement_line.reconcile(lines_vals_list=move_line_data)
+        return log_lines
 
     def process_bank_statement(self):
         """
         This method is used to process the bank statement.
         @author: Maulik Barad on Date 07-Dec-2020.
         """
-        log_lines = self.env['common.log.lines.ept']
+        log_lines = []
         bank_statement = self.statement_id
 
         _logger.info("Processing Bank Statement: %s.", bank_statement.name)
-        if bank_statement.state == "open":
-            bank_statement.button_post()
-        if bank_statement.state == 'confirm':
-            self.state = 'validated'
+        # if bank_statement.state == "open":
+        #     bank_statement.button_post()
 
         for statement_line in bank_statement.line_ids.filtered(lambda x: not x.is_reconciled):
             move_line_data = []
             move_line_total_amount = 0.0
             currency_ids = []
             paid_move_lines = []
-            if statement_line.shopify_transaction_type in ["charge", "refund"]:
+            if statement_line.shopify_transaction_type in ["charge", "refund","payment_refund"]:
                 invoices = self.get_invoices_for_reconcile(statement_line)
                 if not invoices:
                     continue
@@ -727,22 +747,22 @@ class ShopifyPaymentReportEpt(models.Model):
                         statement_line, unpaid_invoices)
 
                 log_line = self.reconcile_invoice_refund(statement_line, move_line_total_amount, currency_ids,
-                                                         move_line_data, paid_move_lines)
+                                                         move_line_data, paid_move_lines, log_lines)
             else:
-                log_line = self.reconcile_other_transactions(statement_line, move_line_data)
+                log_line = self.reconcile_other_transactions(statement_line, move_line_data, log_lines)
 
-            if log_line:
-                log_lines += log_line
+            # if log_line:
+            #     log_lines += log_line
 
         if log_lines:
-            self.set_payout_log_book(log_lines)
+            self.set_payout_log_line(log_lines)
             note = ""
             for log_line in self.common_log_line_ids:
                 note += str(log_line.message) + "<br/>"
             self.message_post(body=note)
 
             if self.instance_id.is_shopify_create_schedule:
-                self.common_log_line_ids.create_payout_schedule_activity(note, self.id)
+                self.common_log_line_ids.create_payout_schedule_activity(note, self)
 
         if bank_statement.line_ids.filtered(lambda x: not x.is_reconciled):
             self.write({'state': 'partially_processed'})
@@ -757,7 +777,7 @@ class ShopifyPaymentReportEpt(models.Model):
         Use : To reconcile the bank statement.
         @author: Maulik Barad on Date 07-Dec-2020.
         """
-        self.statement_id.button_validate_or_action()
+       # self.statement_id.button_validate_or_action()
         self.state = 'validated'
         return True
 
@@ -844,25 +864,19 @@ class ShopifyPaymentReportEpt(models.Model):
             "name": "Logs",
             "type": "ir.actions.act_window",
             "res_model": "common.log.book.ept",
-            "res_id": self.common_log_book_id.id,
             "views": [(False, "form")],
             'context': self.env.context
         }
 
-    def set_payout_log_book(self, log_lines):
+    def set_payout_log_line(self, log_lines):
         """
         This method is used to create new log book, add log lines in it and attach to the Payout Report.
         @param log_lines: Recordset of the Log Lines.
         @author: Maulik Barad on Date 09-Dec-2020.
         """
-        common_log_book_obj = self.env['common.log.book.ept']
-        model_id = self.env['common.log.lines.ept'].get_model_id(self._name)
-
-        if not self.common_log_book_id:
-            log_book = common_log_book_obj.shopify_create_common_log_book("import", self.instance_id, model_id)
-            self.common_log_book_id = log_book
-        else:
-            log_book = self.common_log_book_id
-        log_book.write({"log_lines": [(6, 0, log_lines.ids)]})
+        for log_line in log_lines:
+            self.env["common.log.lines.ept"].create_common_log_line_ept(shopify_instance_id=self.instance_id.id,
+                                                                        message=log_line.get('message'),
+                                                                        model_name=self._name)
 
         return True

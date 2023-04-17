@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
 # See LICENSE file for full copyright and licensing details.
-import os
-import zipfile
 from odoo import models, fields, api, _, SUPERUSER_ID
 from odoo.exceptions import UserError
 from odoo.addons.web_editor.tools import get_video_embed_code
@@ -215,13 +213,25 @@ class ResConfigSettings(models.TransientModel):
                                          help="Orders and Invoices will be generated of this company.")
     shopify_warehouse_id = fields.Many2one("stock.warehouse", string="Shopify Warehouse",
                                            domain="[('company_id', '=',shopify_company_id)]")
-    auto_import_product = fields.Boolean(string="Auto Create Product if not found?")
+    auto_import_product = fields.Boolean(string="Auto Create Product if not found?",
+                                         help="This option creates a new product in your catalogue if system couldn't "
+                                              "find the product based on SKU / Internal Reference / Default Product "
+                                              "Code. If you are selling on multiple sales channels and "
+                                              "having different SKU / Internal Reference / Default Product Code on "
+                                              "each sales channel, it may lead to creation of duplicate products in "
+                                              "your product catalogue in your database. So we request you to "
+                                              "enable this option, as per your product catalogue configuration.")
     shopify_sync_product_with = fields.Selection([("sku", "Internal Reference(SKU)"), ("barcode", "Barcode"),
                                                   ("sku_or_barcode", "Internal Reference(SKU) and Barcode")],
-                                                 string="Sync Product With", default="sku")
-    shopify_pricelist_id = fields.Many2one("product.pricelist", string="Shopify Pricelist")
-    shopify_stock_field = fields.Many2one("ir.model.fields", string="Stock Field")
-    shopify_section_id = fields.Many2one("crm.team", "Shopify Sales Team")
+                                                 string="Sync Product With", default="sku",
+                                                 help="While sync products from Shopify to Odoo at the moment it will "
+                                                      "sync Odoo and Shopify products base on the selection")
+    shopify_pricelist_id = fields.Many2one("product.pricelist", string="Shopify Pricelist",
+                                           help="Select Pricelist, This price list used to import the "
+                                                "product price and set this pricelist in Shopify sale order")
+    shopify_stock_field = fields.Many2one("ir.model.fields", string="Stock Field",
+                                          help="Select inventory field for shopify products")
+    shopify_section_id = fields.Many2one("crm.team", "Shopify Sales Team", help="Set the sales team for shopify orders")
     shopify_is_use_default_sequence = fields.Boolean("Use Odoo Default Sequence in Shopify Orders",
                                                      help="If checked,Then use default sequence of odoo while create "
                                                           "sale order.")
@@ -233,8 +243,14 @@ class ResConfigSettings(models.TransientModel):
                     behaviour i.e. based on Odoo's Tax and Fiscal Position configurations. \n
                     2) Create New Tax If Not Found - System will search the tax data received 
                     from Shopify in Odoo, will create a new one if it fails in finding it.""")
-    shopify_invoice_tax_account_id = fields.Many2one("account.account", string="Invoice Tax Account For Shopify Tax")
-    shopify_credit_tax_account_id = fields.Many2one("account.account", string="Credit Note Tax Account For Shopify Tax")
+    shopify_invoice_tax_account_id = fields.Many2one("account.account", string="Invoice Tax Account For Shopify Tax",
+                                                     help="Set the invoice tax account base on this account we will "
+                                                          "set this account in the newly created tax when import orders"
+                                                          "from Shopify to Odoo.")
+    shopify_credit_tax_account_id = fields.Many2one("account.account", string="Credit Note Tax Account For Shopify Tax",
+                                                    help="Set the credit tax account base on this account we will set "
+                                                         "this account in the newly created tax when import import "
+                                                         "from Shopify to Odoo.")
     shopify_notify_customer = fields.Boolean("Notify Customer about Update Order Status?",
                                              help="If checked,Notify the customer via email about Update Order Status")
     shopify_user_ids = fields.Many2many("res.users", "shopify_res_config_settings_res_users_rel",
@@ -243,9 +259,10 @@ class ResConfigSettings(models.TransientModel):
     shopify_date_deadline = fields.Integer("Deadline Lead Days for Shopify", default=1,
                                            help="its add number of  days in schedule activity deadline date ")
     is_shopify_create_schedule = fields.Boolean("Create Schedule activity ? ", default=False,
-                                                help="If checked, Then Schedule Activity create on order dara queues"
-                                                     " will any queue line failed.")
-    shopify_sync_product_with_images = fields.Boolean("Shopify Sync/Import Images?", default=False,
+                                                help="If checked, Then it will create Schedule Activity against "
+                                                     "order data queues will any queue line failed, Export stock "
+                                                     "queue and update order status")
+    shopify_sync_product_with_images = fields.Boolean("Sync/Import Images?", default=False,
                                                       help="Check if you want to import images along with products")
     create_shopify_products_webhook = fields.Boolean("Manage Shopify Products via Webhooks",
                                                      help="True : It will create all product related webhooks.\n"
@@ -260,19 +277,8 @@ class ResConfigSettings(models.TransientModel):
                                                       help="This customer will be set in POS order, when"
                                                            "customer is not found.",
                                                       domain="[('customer_rank','>', 0)]")
-    last_date_order_import = fields.Datetime(string="Import Unshipped Orders ",
-                                             help="Last date of sync orders from Shopify to Odoo")
-    last_shipped_order_import_date = fields.Datetime(string="Import Shipped Orders",
-                                                     help="Last date of sync shipped orders from Shopify to Odoo")
-    last_cancel_order_import_date = fields.Datetime(string="Import Cancel Orders",
-                                                    help="Last date of sync shipped orders from Shopify to Odoo")
-    shopify_last_date_customer_import = fields.Datetime(string="Import Customers",
-                                                        help="it is used to store last import customer date")
-    shopify_last_date_update_stock = fields.Datetime(string="Update Stock",
-                                                     help="it is used to store last update inventory stock date")
-    shopify_last_date_product_import = fields.Datetime(string="Import Products",
-                                                       help="it is used to store last import product date")
-    shopify_settlement_report_journal_id = fields.Many2one("account.journal", string="Payout Report Journal")
+    shopify_settlement_report_journal_id = fields.Many2one("account.journal", string="Payout Report Journal",
+                                                           help="Creates Bank Statement using this journal while process Payout Report")
     shopify_payout_last_date_import = fields.Date(string="Import Payout Reports",
                                                   help="It is used to store last update shopify payout report")
     shopify_financial_status_ids = fields.Many2many('sale.auto.workflow.configuration.ept',
@@ -299,22 +305,42 @@ class ResConfigSettings(models.TransientModel):
 
     # Analytic
     shopify_analytic_account_id = fields.Many2one('account.analytic.account', string='Shopify Analytic Account',
-                                                  domain="['|', ('company_id', '=', False), ('company_id', '=', shopify_company_id)]")
+                                                  domain="['|', ('company_id', '=', False), ('company_id', '=', shopify_company_id)]",
+                                                  help="Set the Analytic Account for shopify orders."
+                                                       "Note :- The configuration of the analytic account for this "
+                                                       "instance will be applied to all sales orders created by the "
+                                                       "connector. With this configuration, the Analytic Default Rule "
+                                                       "configured in Odoo will not apply to Shopify orders Invoices."
+                                                       "If you wish to use Odoo Analytic Default Rule, you will not "
+                                                       "have to configure any analytic account here.")
     # shopify_analytic_tag_ids = fields.Many2many('account.analytic.tag', 'shopify_res_config_analytic_account_tag_rel',
     #                                             string='Shopify Analytic Tags',
-    #                                             domain="['|', ('company_id', '=', False), ('company_id', '=', shopify_company_id)]")
+    #                                             domain="['|', ('company_id', '=', False),
+    #                                             ('company_id', '=', shopify_company_id)]")
     shopify_lang_id = fields.Many2one('res.lang', string='Shopify Instance Language',
                                       help="Select language for Shopify customer.")
     # presentment currency
-    order_visible_currency = fields.Boolean(string="Import order in customer visible currency?")
+    order_visible_currency = fields.Boolean(string="Import order in customer visible currency?",
+                                            help="If checked, It will import orders based on the customer's visible"
+                                                 "currency through which the customer has paid the payment for orders.")
 
-    is_delivery_fee = fields.Boolean(string='Are you selling for Colorado State(US)')
-    delivery_fee_name = fields.Char(string='Delivery fee name')
+    is_delivery_fee = fields.Boolean(string='Are you selling for Colorado State(US)',
+                                     help="If checked, the connector will add a delivery fee line to the order.")
+    delivery_fee_name = fields.Char(string='Delivery fee name',
+                                    help="The name you enter here must match the label on the Shopify order "
+                                         "that shows the Colorado delivery fees applied.")
 
-    show_net_profit_report = fields.Boolean(string='Shopify Net Profit Report',
-                                            config_parameter="shopify_ept.show_net_profit_report")
-    is_shopify_digest = fields.Boolean(string="Send Periodic Digest?")
-    is_delivery_multi_warehouse = fields.Boolean(string="Is Delivery from Multiple warehouse?")
+    show_net_profit_report = fields.Boolean(config_parameter="shopify_ept.show_net_profit_report")
+    is_shopify_digest = fields.Boolean(help="If checked, Then it will send periodic digest per KPI.")
+    is_delivery_multi_warehouse = fields.Boolean(string="Is Delivery from Multiple warehouse?",
+                                                 help="If checked, It will update order status based on "
+                                                      "multiple warehouse in Shopify store.")
+    import_customer_as_company = fields.Boolean(string="Import customer as a Company",
+                                                help="If checked, it will create an individual Company type partner "
+                                                     "from the Company name and customer will be created as a "
+                                                     "child partner of Company.")
+    shopify_product_uom_id = fields.Many2one('uom.uom', string='Unit of Measure',
+                                             domain="[('category_id.name', '=', 'Weight')]")
 
     @api.onchange("shopify_instance_id")
     def onchange_shopify_instance_id(self):
@@ -343,14 +369,7 @@ class ResConfigSettings(models.TransientModel):
             self.create_shopify_products_webhook = instance.create_shopify_products_webhook
             self.create_shopify_customers_webhook = instance.create_shopify_customers_webhook
             self.create_shopify_orders_webhook = instance.create_shopify_orders_webhook
-
             self.shopify_default_pos_customer_id = instance.shopify_default_pos_customer_id
-            self.last_date_order_import = instance.last_date_order_import or False
-            self.last_shipped_order_import_date = instance.last_shipped_order_import_date or False
-            self.last_cancel_order_import_date = instance.last_cancel_order_import_date or False
-            self.shopify_last_date_customer_import = instance.shopify_last_date_customer_import or False
-            self.shopify_last_date_update_stock = instance.shopify_last_date_update_stock or False
-            self.shopify_last_date_product_import = instance.shopify_last_date_product_import or False
             self.shopify_payout_last_date_import = instance.payout_last_import_date or False
             self.shopify_settlement_report_journal_id = instance.shopify_settlement_report_journal_id or False
             self.shopify_order_status_ids = instance.shopify_order_status_ids.ids
@@ -364,6 +383,8 @@ class ResConfigSettings(models.TransientModel):
             self.is_delivery_fee = instance.is_delivery_fee or False
             self.delivery_fee_name = instance.delivery_fee_name
             self.is_delivery_multi_warehouse = instance.is_delivery_multi_warehouse or False
+            self.import_customer_as_company = instance.import_customer_as_company or False
+            self.shopify_product_uom_id = instance.shopify_product_uom_id and instance.shopify_product_uom_id.id or False
 
     def execute(self):
         """This method used to set value in an instance of configuration.
@@ -400,12 +421,6 @@ class ResConfigSettings(models.TransientModel):
             values["create_shopify_customers_webhook"] = self.create_shopify_customers_webhook
             values["create_shopify_orders_webhook"] = self.create_shopify_orders_webhook
             values["shopify_default_pos_customer_id"] = self.shopify_default_pos_customer_id.id
-            values["last_date_order_import"] = self.last_date_order_import
-            values["last_shipped_order_import_date"] = self.last_shipped_order_import_date
-            values["last_cancel_order_import_date"] = self.last_cancel_order_import_date
-            values["shopify_last_date_customer_import"] = self.shopify_last_date_customer_import
-            values["shopify_last_date_update_stock"] = self.shopify_last_date_update_stock
-            values["shopify_last_date_product_import"] = self.shopify_last_date_product_import
             values["payout_last_import_date"] = self.shopify_payout_last_date_import or False
             values["shopify_settlement_report_journal_id"] = self.shopify_settlement_report_journal_id or False
             values['shopify_order_status_ids'] = [(6, 0, self.shopify_order_status_ids.ids)]
@@ -420,6 +435,8 @@ class ResConfigSettings(models.TransientModel):
             values["is_delivery_fee"] = self.is_delivery_fee
             values["delivery_fee_name"] = self.delivery_fee_name
             values["is_delivery_multi_warehouse"] = self.is_delivery_multi_warehouse or False
+            values["import_customer_as_company"] = self.import_customer_as_company or False
+            values['shopify_product_uom_id'] = self.shopify_product_uom_id and self.shopify_product_uom_id.id or False
 
             product_webhook_changed = customer_webhook_changed = order_webhook_changed = False
             if instance.create_shopify_products_webhook != self.create_shopify_products_webhook:
@@ -584,6 +601,12 @@ class ResConfigSettings(models.TransientModel):
                 'shopify_analytic_account_id': self.shopify_analytic_account_id.id or False,
                 # 'shopify_analytic_tag_ids': self.shopify_analytic_tag_ids.ids or False,
                 'shopify_lang_id': self.shopify_lang_id and self.shopify_lang_id.id or False,
+                'is_delivery_fee': self.is_delivery_fee,
+                'delivery_fee_name': self.delivery_fee_name,
+                'is_delivery_multi_warehouse': self.is_delivery_multi_warehouse or False,
+                'import_customer_as_company': self.import_customer_as_company or False,
+                'order_visible_currency': self.order_visible_currency or False,
+                'shopify_product_uom_id': self.shopify_product_uom_id and self.shopify_product_uom_id.id or False,
             }
 
             instance.write(basic_configuration_dict)
@@ -610,13 +633,16 @@ class ResConfigSettings(models.TransientModel):
 
             instance.write({
                 'shopify_stock_field': self.shopify_stock_field,
-                'last_date_order_import': self.last_date_order_import,
-                'last_shipped_order_import_date': self.last_shipped_order_import_date,
                 'notify_customer': self.shopify_notify_customer,
                 'shopify_settlement_report_journal_id': self.shopify_settlement_report_journal_id or False,
                 'create_shopify_products_webhook': self.create_shopify_products_webhook,
                 'create_shopify_customers_webhook': self.create_shopify_customers_webhook,
                 'create_shopify_orders_webhook': self.create_shopify_orders_webhook,
+                'is_shopify_digest': self.is_shopify_digest or False,
+                "is_shopify_create_schedule": self.is_shopify_create_schedule,
+                "shopify_user_ids": [(6, 0, self.shopify_user_ids.ids)],
+                "shopify_activity_type_id": self.shopify_activity_type_id and self.shopify_activity_type_id.id or False,
+                "shopify_date_deadline": self.shopify_date_deadline or False
             })
 
             if product_webhook_changed:

@@ -13,7 +13,6 @@
                             name="%(shopify_ept.action_sync_export_stock_queue)d"
                             string="Process Queue Line" type="action"/>
                 </header>
-                <field name="name"/>
                 <field name="shopify_product_id"/>
                 <field name="quantity"/>
                 <field name="inventory_item_id"/>

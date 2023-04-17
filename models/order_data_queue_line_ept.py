@@ -72,7 +72,7 @@ class ShopifyOrderDataQueueLineEpt(models.Model):
             if need_to_create_queue:
                 order_queue = self.shopify_create_order_queue(instance, queue_type, created_by)
                 order_queue_list.append(order_queue.id)
-                message = "Order Queue %s created." % order_queue.name
+                message = "Order Queue Created %s" % ', '.join(order_queue.mapped('name'))
                 self.generate_simple_notification(message)
                 self._cr.commit()
                 need_to_create_queue = False
@@ -192,8 +192,7 @@ class ShopifyOrderDataQueueLineEpt(models.Model):
         :param queues: Record of the order queues.
         @author: Haresh Mori @Emipro Technologies Pvt. Ltd on date 16 October 2020 .
         """
-        ir_model_obj = self.env["ir.model"]
-        common_log_book_obj = self.env["common.log.book.ept"]
+        common_log_line_obj = self.env["common.log.lines.ept"]
         start = time.time()
         order_queue_process_cron_time = queues.shopify_instance_id.get_shopify_cron_execution_time(
             "shopify_ept.process_shopify_order_queue")
@@ -209,8 +208,8 @@ class ShopifyOrderDataQueueLineEpt(models.Model):
                        "automated action to process this queue,<br/>- Ignore, if this queue is already processed.</p>"
                 queue.message_post(body=note)
                 if queue.shopify_instance_id.is_shopify_create_schedule:
-                    model_id = ir_model_obj.search([("model", "=", "shopify.order.data.queue.ept")]).id
-                    common_log_book_obj.create_crash_queue_schedule_activity(queue, model_id, note)
+                    common_log_line_obj.create_crash_queue_schedule_activity(queue, "shopify.order.data.queue.ept",
+                                                                             note)
                 continue
 
             self._cr.commit()
@@ -228,7 +227,6 @@ class ShopifyOrderDataQueueLineEpt(models.Model):
             Task Id : 157350
         """
         sale_order_obj = self.env["sale.order"]
-        common_log_obj = self.env["common.log.book.ept"]
 
         queue_id = self.shopify_order_data_queue_id if len(self.shopify_order_data_queue_id) == 1 else False
         if queue_id:
@@ -237,22 +235,14 @@ class ShopifyOrderDataQueueLineEpt(models.Model):
                 _logger.info("Instance %s is not active.", instance.name)
                 return True
 
-            if queue_id.shopify_order_common_log_book_id:
-                log_book_id = queue_id.shopify_order_common_log_book_id
-            else:
-                model_id = common_log_obj.log_lines.get_model_id("sale.order")
-                log_book_id = common_log_obj.shopify_create_common_log_book("import", instance, model_id)
-
             queue_id.is_process_queue = True
             # Below two line used for When the update order webhook calls.
             if update_order or queue_id.created_by == "webhook":
                 created_by = 'Webhook'
-                sale_order_obj.update_shopify_order(self, log_book_id, created_by)
+                sale_order_obj.update_shopify_order(self, created_by, instance)
             else:
-                sale_order_obj.import_shopify_orders(self, log_book_id)
-            queue_id.write({'is_process_queue': False, 'shopify_order_common_log_book_id': log_book_id})
-            if log_book_id and not log_book_id.log_lines:
-                log_book_id.unlink()
+                sale_order_obj.import_shopify_orders(self, instance)
+            queue_id.write({'is_process_queue': False})
 
             if instance.is_shopify_create_schedule:
                 queue_id.create_schedule_activity(queue_id)

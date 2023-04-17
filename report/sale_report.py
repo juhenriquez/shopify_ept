@@ -10,6 +10,15 @@ class SaleReport(models.Model):
 
     shopify_instance_id = fields.Many2one("shopify.instance.ept", "Shopify Instance", copy=False, readonly=True)
 
+    # def _query(self, with_clause='', fields={}, groupby='', from_clause=''):
+    #     """ Inherit the query here to add the shopify instance field for group by.
+    #         @author: Haresh Mori @Emipro Technologies Pvt. Ltd on date 29 September 2020 .
+    #         Task_id: 167120
+    #     """
+    #     fields['shopify_instance_id'] = ", s.shopify_instance_id as shopify_instance_id"
+    #     groupby += ', s.shopify_instance_id'
+    #     return super(SaleReport, self)._query(with_clause, fields, groupby, from_clause)
+
     def _select_additional_fields(self):
         res = super()._select_additional_fields()
         res['shopify_instance_id'] = "s.shopify_instance_id"

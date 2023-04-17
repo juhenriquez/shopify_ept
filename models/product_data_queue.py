@@ -28,9 +28,7 @@ class ShopifyProductDataQueue(models.Model):
     product_data_queue_lines = fields.One2many("shopify.product.data.queue.line.ept",
                                                "product_data_queue_id",
                                                string="Product Queue Lines")
-    common_log_book_id = fields.Many2one("common.log.book.ept",
-                                         help="""Related Log book which has all logs for current queue.""")
-    common_log_lines_ids = fields.One2many(related="common_log_book_id.log_lines")
+    common_log_lines_ids = fields.One2many("common.log.lines.ept", compute="_compute_log_lines")
     queue_line_total_records = fields.Integer(string="Total Records",
                                               compute="_compute_queue_line_record")
     queue_line_draft_records = fields.Integer(string="Draft Records",
@@ -50,6 +48,11 @@ class ShopifyProductDataQueue(models.Model):
     queue_process_count = fields.Integer(string="Queue Process Times",
                                          help="it is used know queue how many time processed")
     skip_existing_product = fields.Boolean(string="Do Not Update Existing Products")
+
+    @api.depends('product_data_queue_lines.common_log_lines_ids')
+    def _compute_log_lines(self):
+        for line in self:
+            line.common_log_lines_ids = line.product_data_queue_lines.common_log_lines_ids
 
     @api.depends("product_data_queue_lines.state")
     def _compute_queue_line_record(self):
@@ -81,17 +84,18 @@ class ShopifyProductDataQueue(models.Model):
             else:
                 record.state = "partially_completed"
 
-    @api.model
+    @api.model_create_multi
     def create(self, vals):
         """This method used to create a sequence for product queue.
             @author: Haresh Mori @Emipro Technologies Pvt. Ltd on date 05/10/2019.
         """
-        sequence_id = self.env.ref("shopify_ept.seq_product_queue_data").ids
-        if sequence_id:
-            record_name = self.env["ir.sequence"].browse(sequence_id).next_by_id()
-        else:
-            record_name = "/"
-        vals.update({"name": record_name or ""})
+        for val in vals:
+            sequence_id = self.env.ref("shopify_ept.seq_product_queue_data").ids
+            if sequence_id:
+                record_name = self.env["ir.sequence"].browse(sequence_id).next_by_id()
+            else:
+                record_name = "/"
+            val.update({"name": record_name or ""})
         return super(ShopifyProductDataQueue, self).create(vals)
 
     def create_product_queues(self, instance, results, skip_existing_product, template_ids=""):
@@ -110,7 +114,7 @@ class ShopifyProductDataQueue(models.Model):
             if count == 125:
                 product_queue = self.shopify_create_product_queue(instance, skip_existing_product=skip_existing_product)
                 product_queue_list.append(product_queue.id)
-                message = "Product Queue Created", product_queue.name
+                message = "Product Queue Created %s" % ', '.join(product_queue.mapped('name'))
                 order_data_queue_line.generate_simple_notification(message)
                 self._cr.commit()
                 _logger.info(message)
@@ -271,7 +275,7 @@ class ShopifyProductDataQueue(models.Model):
         @author:Bhavesh Jadav 13/12/2019
         """
         mail_activity_obj = self.env['mail.activity']
-        common_log_book_obj = self.env['common.log.book.ept']
+        common_log_line_obj = self.env['common.log.lines.ept']
         queue_id, model_id, data_ref, note = self.assign_queue_model_date_ref_note(from_sale, queue_line)
         activity_type_id = queue_id and queue_id.shopify_instance_id.shopify_activity_type_id.id
         date_deadline = datetime.strftime(
@@ -285,7 +289,7 @@ class ShopifyProductDataQueue(models.Model):
                      ('activity_type_id', '=', activity_type_id)])
                 duplicate_note = mail_activity.filtered(lambda x: x.note == note_2)
                 if not mail_activity or not duplicate_note:
-                    vals = common_log_book_obj.prepare_vals_for_schedule_activity(activity_type_id, note, queue_id,
+                    vals = common_log_line_obj.prepare_vals_for_schedule_activity(activity_type_id, note, queue_id,
                                                                                   user_id, model_id.id, date_deadline)
                     try:
                         mail_activity_obj.create(vals)
@@ -342,5 +346,10 @@ class ShopifyProductDataQueue(models.Model):
 
     @api.model
     def retrieve_dashboard(self, *args, **kwargs):
+        """
+        :param args:
+        :param kwargs:
+        :return:
+        """
         dashboard = self.env['queue.line.dashboard']
-        return dashboard.get_data(table='shopify.product.data.queue.line.ept',)
+        return dashboard.get_data(table='shopify.product.data.queue.line.ept', )

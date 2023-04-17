@@ -29,10 +29,7 @@ class ShopifyOrderDataQueueEpt(models.Model):
                               ('completed', 'Completed'), ('failed', 'Failed')], tracking=True,
                              default='draft', copy=False, compute="_compute_queue_state",
                              store=True)
-    shopify_order_common_log_book_id = fields.Many2one("common.log.book.ept", help="""Related Log book which has
-                                                                    all logs for current queue.""")
-    shopify_order_common_log_lines_ids = fields.One2many(
-        related="shopify_order_common_log_book_id.log_lines")
+    shopify_order_common_log_lines_ids = fields.One2many("common.log.lines.ept", compute="_compute_log_lines")
 
     order_data_queue_line_ids = fields.One2many("shopify.order.data.queue.line.ept",
                                                 "shopify_order_data_queue_id")
@@ -57,6 +54,11 @@ class ShopifyOrderDataQueueEpt(models.Model):
     is_action_require = fields.Boolean(default=False, help="it is used  to find the action require queue")
     queue_type = fields.Selection([("shipped", "Shipped Order Queue"), ("unshipped", "Unshipped Order Queue")],
                                   help="Identify to queue for which type of order import.")
+
+    @api.depends('order_data_queue_line_ids.shopify_order_common_log_lines_ids')
+    def _compute_log_lines(self):
+        for line in self:
+            line.shopify_order_common_log_lines_ids = line.order_data_queue_line_ids.shopify_order_common_log_lines_ids
 
     @api.depends('order_data_queue_line_ids.state')
     def _compute_queue_state(self):
@@ -89,17 +91,18 @@ class ShopifyOrderDataQueueEpt(models.Model):
             order_queue.order_queue_line_fail_record = len(queue_lines.filtered(lambda x: x.state == "failed"))
             order_queue.order_queue_line_cancel_record = len(queue_lines.filtered(lambda x: x.state == "cancel"))
 
-    @api.model
+    @api.model_create_multi
     def create(self, vals):
         """This method used to create a sequence for Order Queue Data.
             @author: Haresh Mori @Emipro Technologies Pvt. Ltd on date 04/11/2019.
         """
-        sequence_id = self.env.ref('shopify_ept.seq_order_queue_data').ids
-        if sequence_id:
-            record_name = self.env['ir.sequence'].browse(sequence_id).next_by_id()
-        else:
-            record_name = '/'
-        vals.update({'name': record_name or ''})
+        for val in vals:
+            sequence_id = self.env.ref('shopify_ept.seq_order_queue_data').ids
+            if sequence_id:
+                record_name = self.env['ir.sequence'].browse(sequence_id).next_by_id()
+            else:
+                record_name = '/'
+            val.update({'name': record_name or ''})
         return super(ShopifyOrderDataQueueEpt, self).create(vals)
 
     def import_order_cron_action(self, ctx=False):
@@ -302,7 +305,7 @@ class ShopifyOrderDataQueueEpt(models.Model):
                                                                                       instance,
                                                                                       queue_type,
                                                                                       created_by="import")
-                order_queue_obj.browse(order_queues).order_data_queue_line_ids.process_import_order_queue_data()
+                #order_queue_obj.browse(order_queues).order_data_queue_line_ids.process_import_order_queue_data()
         return True
 
     def create_schedule_activity(self, queue_id):
@@ -345,5 +348,10 @@ class ShopifyOrderDataQueueEpt(models.Model):
 
     @api.model
     def retrieve_dashboard(self, *args, **kwargs):
+        """
+        :param args:
+        :param kwargs:
+        :return:
+        """
         dashboard = self.env['queue.line.dashboard']
         return dashboard.get_data(table='shopify.order.data.queue.line.ept')
