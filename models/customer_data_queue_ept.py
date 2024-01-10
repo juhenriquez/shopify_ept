@@ -91,5 +91,10 @@ class ShopifyCustomerDataQueueEpt(models.Model):
 
     @api.model
     def retrieve_dashboard(self, *args, **kwargs):
+        """
+        :param args:
+        :param kwargs:
+        :return:
+        """
         dashboard = self.env['queue.line.dashboard']
         return dashboard.get_data(table='shopify.customer.data.queue.line.ept')

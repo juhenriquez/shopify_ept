@@ -1,11 +1,9 @@
 import time
 import json
 import logging
-from datetime import datetime
 import pytz
-from odoo import models, fields, api, _
+from odoo import models, fields
 
-from ..shopify.pyactiveresource.connection import ResourceNotFound
 from ..shopify.pyactiveresource.connection import ClientError
 from .. import shopify
 
@@ -37,7 +35,8 @@ class ShopifyOrderDataQueueLineEpt(models.Model):
 
     def auto_export_stock_queue_data(self):
         """
-        This method is used to find export stock queue which queue lines have state in draft and is_action_require is False.
+        This method is used to find export stock queue which queue lines have state
+        in draft and is_action_require is False.
         @author: Nilam Kubavat @Emipro Technologies Pvt.Ltd on date 31-Aug-2022.
         Task Id : 199065
         """
@@ -131,14 +130,28 @@ class ShopifyOrderDataQueueLineEpt(models.Model):
                 except ClientError as error:
                     if hasattr(error,
                                "response") and error.response.code == 429 and error.response.msg == "Too Many Requests":
-                        time.sleep(int(float(error.response.headers.get('Retry-After', 5))))
-                        shopify.InventoryLevel.set(queue_line.location_id,
-                                                   queue_line.inventory_item_id,
-                                                   queue_line.quantity)
+                        try:
+                            time.sleep(int(float(error.response.headers.get('Retry-After', 5))))
+                            shopify.InventoryLevel.set(queue_line.location_id,
+                                                       queue_line.inventory_item_id,
+                                                       queue_line.quantity)
+                            queue_line.write({"state": "done"})
+                        except Exception as error:
+                            message = "Error while Export stock for Product ID: %s & Product Name: '%s' for instance:" \
+                                      "'%s'not found in Shopify store\nError: %s\n%s" % (
+                                          odoo_product.id, odoo_product.name, instance.name,
+                                          str(error.response.code) + " " + error.response.msg,
+                                          json.loads(error.response.body.decode()).get("errors")[0]
+                                      )
+                            log_line = common_log_line_obj.shopify_create_export_stock_log_line(message, model_id,
+                                                                                                queue_line,
+                                                                                                log_book_id)
+                            queue_line.write({"state": "failed"})
                         continue
+
                     elif error.response.code == 422 and error.response.msg == "Unprocessable Entity":
-                        if json.loads(error.response.body.decode()).get("errors")[
-                            0] == 'Inventory item does not have inventory tracking enabled':
+                        if json.loads(error.response.body.decode()).get("errors")[0] \
+                                == 'Inventory item does not have inventory tracking enabled':
                             queue_line.shopify_product_id.write({'inventory_management': "Dont track Inventory"})
                             queue_line.write({'state': 'done'})
                         continue
@@ -166,6 +179,7 @@ class ShopifyOrderDataQueueLineEpt(models.Model):
                     queue_line.write({"state": "done"})
                 else:
                     queue_line.write({"state": "failed"})
+                self._cr.commit()
             if not log_book_id.log_lines:
                 log_book_id.unlink()
         return True

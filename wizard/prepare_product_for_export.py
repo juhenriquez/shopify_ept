@@ -293,7 +293,7 @@ class PrepareProductForExport(models.TransientModel):
             [('template_id', '=', shopify_template.product_tmpl_id.id)])
         images = common_product_images.filtered(lambda img: img.image == shopify_template.product_tmpl_id.image_1920)
         if not images and shopify_template.product_tmpl_id.image_1920:
-            common_product_image = common_product_image_obj.create({
+            common_product_image_obj.create({
                 "name": shopify_template.name,
                 "template_id": shopify_template.product_tmpl_id.id,
                 "image": shopify_template.product_tmpl_id.image_1920,
@@ -324,7 +324,7 @@ class PrepareProductForExport(models.TransientModel):
             [('product_id', '=', shopify_variant.product_id.id)])
         images = common_product_images.filtered(lambda img: img.image == shopify_variant.product_id.image_1920)
         if not images and shopify_template.product_tmpl_id.image_1920:
-            common_product_image = common_product_image_obj.create({
+            common_product_image_obj.create({
                 "name": shopify_template.name,
                 "template_id": shopify_template.product_tmpl_id.id,
                 "image": shopify_variant.product_id.image_1920,

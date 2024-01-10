@@ -14,9 +14,9 @@
                 <field name="shopify_instance_id" invisible="1"/>
             </field>
             <xpath expr="//header" position="inside">
-                <button name="manually_update_shipment"
-                        string="Update Order Shipping Status" class="oe_highlight" type="object"
-                        attrs="{'invisible': ['|','|',('state','!=','done'),('updated_in_shopify','=',True),('is_shopify_delivery_order','!=',True)]}"
+                <button name="manually_update_shipment" string="Update Order Shipping Status" class="oe_highlight"
+                        type="object"
+                        attrs="{'invisible': ['|','|','|',('updated_in_shopify','=',True),('is_shopify_delivery_order','!=',True),'&amp;',('state','!=','done'),('picking_type_code', 'in', ['outgoing','incoming']),'&amp;',('state','in',['draft','waiting','confirmed','assigned','done','cancel']),('picking_type_code', 'not in', ['outgoing','incoming'])]}"
                         help="It will update order fulfillment and tracking reference details to Shopify store."/>
             </xpath>
         </field>
@@ -30,7 +30,7 @@
         <field name="arch" type="xml">
             <field name="company_id" position="after">
                 <field name="is_shopify_delivery_order" invisible="1"/>
-                <field name="updated_in_shopify"  optional="hide"
+                <field name="updated_in_shopify" optional="hide"
                        attrs="{'invisible':[('is_shopify_delivery_order','!=',True)]}" readonly="True"/>
             </field>
         </field>

@@ -48,6 +48,7 @@ class ShopifyResPartnerEpt(models.Model):
             tag_ids.append(partner_obj.create_or_search_tag(tag))
 
         if partner:
+            partner.write({"category_id": tag_ids})
             return partner
 
         shopify_partner_values = {"shopify_customer_id": shopify_customer_id,
@@ -125,9 +126,13 @@ class ShopifyResPartnerEpt(models.Model):
             if partner and not partner.child_ids and partner_type == 'invoice':
                 partner.write({"type": partner_type})
         if partner:
+            if parent_partner.email:
+                partner.write({'email': parent_partner.email})
             return partner
 
         partner_vals.update({"type": partner_type, "parent_id": parent_partner.id})
+        if parent_partner.email:
+            partner_vals.update({'email': parent_partner.email})
         partner = partner_obj.create(partner_vals)
 
         company_name and partner.write({"company_name": company_name})
