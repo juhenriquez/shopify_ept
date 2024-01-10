@@ -14,3 +14,7 @@
 .o_settings_container_shopify{
       padding: 0 25px 0 17px !important;
 }
+
+.table-responsive{
+        overflow-x: inherit;
+}

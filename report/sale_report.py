@@ -22,7 +22,7 @@ class SaleReport(models.Model):
     def _select_additional_fields(self):
         res = super()._select_additional_fields()
         res['shopify_instance_id'] = "s.shopify_instance_id"
-        return res 
+        return res
 
     def _group_by_sale(self):
         res = super()._group_by_sale()

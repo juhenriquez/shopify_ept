@@ -74,8 +74,8 @@ class ShopifyProductDataQueueLineEpt(models.Model):
             product_data_queue_line_ids = queue.product_data_queue_lines
 
             # For counting the queue crashes and creating schedule activity for the queue.
-            # queue.queue_process_count += 1
-            queue.queue_process_count = 4
+            queue.queue_process_count += 1
+            #queue.queue_process_count = 4
             if queue.queue_process_count > 3:
                 queue.is_action_require = True
                 note = "<p>Need to process this product queue manually.There are 3 attempts been made by " \

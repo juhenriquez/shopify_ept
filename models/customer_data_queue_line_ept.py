@@ -54,15 +54,21 @@ class ShopifyCustomerDataQueueLineEpt(models.Model):
         name = "%s %s" % (result.get("first_name") or "", result.get("last_name") or "")
         customer_id = result.get("id")
         data = json.dumps(result)
+        instance_id = customer_queue_id.shopify_instance_id.id
+        existing_customer_data = synced_shopify_customers_line_obj.search(
+            [('shopify_customer_data_id', '=', customer_id), ('shopify_instance_id', '=', instance_id),
+             ('state', 'in', ['draft', 'failed'])])
         line_vals = {
             "synced_customer_queue_id": customer_queue_id.id,
             "shopify_customer_data_id": customer_id or "",
             "name": name.strip(),
             "shopify_synced_customer_data": data,
-            "shopify_instance_id": self.shopify_instance_id.id,
+            "shopify_instance_id": instance_id,
             "last_process_date": datetime.now(),
         }
-        return synced_shopify_customers_line_obj.create(line_vals)
+        if not existing_customer_data:
+            return synced_shopify_customers_line_obj.create(line_vals)
+        return existing_customer_data.write({'shopify_synced_customer_data': data, 'state': 'draft'})
 
     @api.model
     def sync_shopify_customer_into_odoo(self):
@@ -108,7 +114,7 @@ class ShopifyCustomerDataQueueLineEpt(models.Model):
             results = queue.synced_customer_queue_line_ids.filtered(lambda x: x.state == "draft")
 
             queue.queue_process_count += 1
-            #queue.queue_process_count = 4
+            # queue.queue_process_count = 4
             if queue.queue_process_count > 3:
                 queue.is_action_require = True
                 note = _("<p>Need to process this customer queue manually.There are 3 attempts been made by " \

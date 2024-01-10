@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
-    <data noupdate="0">
+    <data noupdate="1">
 
         <!-- Multi - Company Rules -->
         <record model="ir.rule" id="shopify_instance_comp_rule">
